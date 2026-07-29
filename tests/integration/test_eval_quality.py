@@ -87,14 +87,14 @@ SAMPLE_LEDGERS = [
 
 
 def test_eval_quality_spike_records_verdict() -> None:
-    from local_ledger.analysis.evaluate import llm_interpret
-    from local_ledger.analysis.payloads import EvaluationPayload
-    from local_ledger.llm.providers import get_local_client, load_settings, save_settings
-    from local_ledger.llm.structured import make_openai_completer
     from sqlalchemy import create_engine
     from sqlmodel import Session
 
+    from local_ledger.analysis.evaluate import llm_interpret
+    from local_ledger.analysis.payloads import EvaluationPayload
     from local_ledger.db import DEFAULT_DB_URL, run_migrations
+    from local_ledger.llm.providers import get_local_client, load_settings, save_settings
+    from local_ledger.llm.structured import make_openai_completer
 
     run_migrations(DEFAULT_DB_URL)
     engine = create_engine(DEFAULT_DB_URL)
@@ -116,7 +116,7 @@ def test_eval_quality_spike_records_verdict() -> None:
             # Placeholder scoring: agent re-scores against rubric.md manually.
             # Here we only record the raw evaluation; a human/oracle scores it.
             results.append({"name": sample["name"], "evaluation": blob, "auto_pass": None})
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             results.append({"name": sample["name"], "error": str(exc), "auto_pass": False})
 
     passes = sum(1 for r in results if r.get("auto_pass"))
