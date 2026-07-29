@@ -1,7 +1,8 @@
-"""Local Ledger - Streamlit entry point.
+"""Local Ledger - Streamlit multipage entry point.
 
-Startup guard: refuse to bind anything other than loopback. This is a hard
-security invariant (see plan .omo/plans/local-ledger.md, Must NOT have).
+Startup guard refuses non-localhost bind (hard security invariant). Initializes
+the schema, renders an Ollama availability banner on every page, and wires
+navigation over app_pages/.
 """
 
 from __future__ import annotations
@@ -12,21 +13,13 @@ _LOOPBACK_ADDRESSES = {"127.0.0.1", "localhost", "::1"}
 
 
 def _effective_bind_address() -> str:
-    """Resolve the address Streamlit will actually bind to.
-
-    Precedence mirrors streamlit's own: explicit CLI/STREAMLIT_* env var wins,
-    then the config file, then streamlit's compiled default.
-    """
     explicit = os.environ.get("STREAMLIT_SERVER_ADDRESS")
     if explicit:
         return explicit
-    # streamlit's compiled default is "localhost". The config file at
-    # .streamlit/config.toml sets 127.0.0.1; the test below covers override.
     return "localhost"
 
 
 def assert_localhost_bind() -> None:
-    """Refuse to start if the effective bind address is not loopback."""
     address = _effective_bind_address()
     if address not in _LOOPBACK_ADDRESSES:
         raise SystemExit(
@@ -35,19 +28,30 @@ def assert_localhost_bind() -> None:
         )
 
 
-# Execute the guard at import so any launch path (streamlit run, AppTest) is
-# covered. The guard is a no-op once the address is loopback.
 assert_localhost_bind()
 
 
 def main() -> None:
-    # Full multipage entry lands in todo 20. This stub imports streamlit lazily
-    # so the guard itself has zero hard dependency at import time.
     import streamlit as st
 
-    st.set_page_config(page_title="Local Ledger", page_icon="📒")
-    st.title("Local Ledger")
-    st.write("App shell coming in a later wave.")
+    from local_ledger.ui.chrome import render_ollama_banner
+
+    st.set_page_config(page_title="Local Ledger", page_icon="📒", layout="wide")
+
+    page = st.navigation(
+        [
+            st.Page("app_pages/home.py", title="Home", icon=":material/dashboard:"),
+            st.Page("app_pages/transactions.py", title="Transactions", icon=":material/receipt_long:"),
+            st.Page("app_pages/budgets.py", title="Budgets", icon=":material/savings:"),
+            st.Page("app_pages/import_.py", title="Import", icon=":material/upload_file:"),
+            st.Page("app_pages/insights.py", title="Insights", icon=":material/insights:"),
+            st.Page("app_pages/settings.py", title="Settings", icon=":material/settings:"),
+        ],
+        position="top",
+    )
+
+    render_ollama_banner()
+    page.run()
 
 
 if __name__ == "__main__":
