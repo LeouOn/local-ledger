@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# App data
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Evidence (per-session QA artifacts)
+.omo/evidence/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
