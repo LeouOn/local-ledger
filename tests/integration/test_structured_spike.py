@@ -41,13 +41,13 @@ def _require_ollama() -> None:
 
 
 def test_structured_output_spike_records_verdict() -> None:
-    from local_ledger.llm.structured import extract, make_openai_completer
-    from local_ledger.llm.providers import load_settings
     from pydantic import BaseModel
+    from sqlalchemy import create_engine
     from sqlmodel import Session
 
     from local_ledger.db import DEFAULT_DB_URL, run_migrations
-    from sqlalchemy import create_engine
+    from local_ledger.llm.providers import load_settings
+    from local_ledger.llm.structured import extract, make_openai_completer
 
     class Item(BaseModel):
         date: str

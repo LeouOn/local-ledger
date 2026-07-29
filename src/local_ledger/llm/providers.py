@@ -8,6 +8,7 @@ raises ``CloudCallBlocked`` until then).
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 
 from openai import OpenAI
@@ -25,6 +26,13 @@ from local_ledger.models import ProviderSettings
 
 class CloudCallBlocked(Exception):
     """Raised when a cloud call is attempted without per-call consent."""
+
+
+class ConsentDenied(Exception):
+    """Re-exported alias used by the privacy module's assertion path."""
+
+
+from local_ledger.llm.privacy import assert_consent  # noqa: E402
 
 
 def _ollama_root(openai_base_url: str) -> str:
@@ -75,9 +83,18 @@ def require_local_ready(
 
 
 def get_cloud_client(consent_token: str | None, settings: ProviderSettings) -> OpenAI:
-    raise CloudCallBlocked(
-        "cloud provider access requires explicit per-call consent (consent issuance wired in todo 10)"
-    )
+    if not settings.cloud_base_url or not settings.cloud_api_key_env:
+        raise CloudCallBlocked("cloud provider is not configured (set base URL and key-env in Settings)")
+    try:
+        assert_consent(consent_token)
+    except Exception as exc:  # ConsentDenied
+        raise CloudCallBlocked("cloud provider access requires explicit per-call consent") from exc
+    api_key = os.environ.get(settings.cloud_api_key_env)
+    if not api_key:
+        raise CloudCallBlocked(
+            f"cloud API key env var {settings.cloud_api_key_env!r} is not set in the environment"
+        )
+    return OpenAI(base_url=settings.cloud_base_url, api_key=api_key)
 
 
 def list_local_models(
