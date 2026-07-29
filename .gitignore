@@ -15,6 +15,9 @@ data/
 
 # Evidence (per-session QA artifacts)
 .omo/evidence/
+# Harness-internal session state (keep plans/drafts/research, ignore the rest)
+.omo/ralph-loop.local.md
+.omo/run-continuation/
 
 # OS / editor
 .DS_Store
