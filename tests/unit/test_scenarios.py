@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from local_ledger.analysis.scenarios import (
-    ProjectedMonth,
     ScenarioResult,
     project_forward,
     what_if_scenario,
