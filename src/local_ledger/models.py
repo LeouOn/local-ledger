@@ -220,3 +220,47 @@ class StagedTransaction(SQLModel, table=True):
     @classmethod
     def _check_date(cls, v: str) -> str:
         return _validate_iso_date(v)
+
+
+class SavingsGoal(SQLModel, table=True):
+    model_config = ConfigDict(validate_assignment=True)
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    target_cents: int
+    target_date: str  # YYYY-MM-DD
+    monthly_contribution_cents: int
+    created_at: datetime = Field(default_factory=_utcnow)
+    notes: str | None = None
+
+    @field_validator("target_cents", "monthly_contribution_cents", mode="before")
+    @classmethod
+    def _check_positive(cls, v: object) -> int:
+        if isinstance(v, bool):
+            raise ValueError("must be an int, not bool")
+        if isinstance(v, float):
+            raise ValueError("must be an int")
+        if not isinstance(v, int):
+            raise ValueError("must be an int")
+        if v <= 0:
+            raise ValueError("must be a positive integer")
+        return v
+
+    @field_validator("target_date")
+    @classmethod
+    def _check_date(cls, v: str) -> str:
+        return _validate_iso_date(v)
+
+
+class ChatMessage(SQLModel, table=True):
+    model_config = ConfigDict(validate_assignment=True)
+    id: int | None = Field(default=None, primary_key=True)
+    role: str  # user | assistant
+    content: str
+    created_at: datetime = Field(default_factory=_utcnow)
+
+    @field_validator("role")
+    @classmethod
+    def _check_role(cls, v: str) -> str:
+        if v not in ("user", "assistant"):
+            raise ValueError("role must be 'user' or 'assistant'")
+        return v
