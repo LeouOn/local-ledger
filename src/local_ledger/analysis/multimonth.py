@@ -66,10 +66,7 @@ def build_multimonth_payload(
             income_per_month.append(s.income_cents)
 
         first, last = spent_per_month[0], spent_per_month[-1]
-        if first == 0:
-            mom_delta = 0.0 if last == 0 else 100.0
-        else:
-            mom_delta = ((last - first) / first) * 100
+        mom_delta = (0.0 if last == 0 else 100.0) if first == 0 else ((last - first) / first) * 100
         if abs(mom_delta) < FLAT_THRESHOLD_PCT:
             direction = "flat"
         elif mom_delta > 0:
