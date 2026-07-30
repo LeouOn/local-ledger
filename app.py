@@ -54,18 +54,23 @@ def assert_localhost_bind() -> None:
 assert_localhost_bind()
 
 
+def _check_runtime_bind() -> str | None:
+    resolved = _streamlit_config_address()
+    if resolved and resolved not in _LOOPBACK_ADDRESSES:
+        return resolved
+    return None
+
+
 def main() -> None:
     import streamlit as st
 
     from local_ledger.ui.chrome import render_ollama_banner
 
-    # Runtime guard: by now Streamlit has parsed ALL flags/config/env. This
-    # catches --server.address 0.0.0.0 that the import-time guard cannot see.
-    resolved = _streamlit_config_address()
-    if resolved and resolved not in _LOOPBACK_ADDRESSES:
+    non_loopback = _check_runtime_bind()
+    if non_loopback:
         st.set_page_config(page_title="Local Ledger - REFUSED")
         st.error(
-            f"REFUSING TO SERVE on non-localhost address {resolved!r}. "
+            f"REFUSING TO SERVE on non-localhost address {non_loopback!r}. "
             "Local Ledger is single-user localhost-only by design. "
             "Remove the --server.address flag or set it to 127.0.0.1."
         )

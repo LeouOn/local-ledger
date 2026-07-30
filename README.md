@@ -22,8 +22,10 @@ while remembering its own suggestions so you can see whether they helped.
 
 ## Privacy posture
 
-- Runs on your machine, bound to `127.0.0.1` only. The app refuses to start if
-  told to bind any other address.
+- Runs on your machine. Bound to `127.0.0.1` by default (`.streamlit/config.toml`).
+  If a non-localhost address is detected at startup, the app refuses to serve
+  any data (error page + `st.stop`). The import-time guard also catches the
+  `STREAMLIT_SERVER_ADDRESS` env var.
 - Local LLM (Ollama) by default; cloud is opt-in **per call** with a one-use
   consent token you issue after previewing the exact payload.
 - The only thing that ever leaves the machine is **category names plus numeric

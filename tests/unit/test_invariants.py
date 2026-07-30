@@ -103,3 +103,18 @@ def test_privacy_payload_path_has_no_transaction_import() -> None:
     # Transaction is imported only for the type-check rejection, never serialized out
     assert "model_validate(tx" not in src
     assert "tx.model_dump_json" not in src
+
+
+def test_runtime_bind_guard_detects_non_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R1: the runtime guard exercised by main() must detect non-loopback."""
+    import app
+
+    monkeypatch.setattr(app, "_streamlit_config_address", lambda: "0.0.0.0")
+    assert app._check_runtime_bind() == "0.0.0.0"
+
+
+def test_runtime_bind_guard_passes_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app
+
+    monkeypatch.setattr(app, "_streamlit_config_address", lambda: "localhost")
+    assert app._check_runtime_bind() is None
