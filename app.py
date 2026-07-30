@@ -64,6 +64,7 @@ def _check_runtime_bind() -> str | None:
 def main() -> None:
     import streamlit as st
 
+    from local_ledger.ui.chat_sidebar import render_chat_sidebar
     from local_ledger.ui.chrome import render_ollama_banner
 
     non_loopback = _check_runtime_bind()
@@ -85,6 +86,7 @@ def main() -> None:
             st.Page("app_pages/budgets.py", title="Budgets", icon=":material/savings:"),
             st.Page("app_pages/import_.py", title="Import", icon=":material/upload_file:"),
             st.Page("app_pages/insights.py", title="Insights", icon=":material/insights:"),
+            st.Page("app_pages/goals.py", title="Goals", icon=":material/flag:"),
             st.Page("app_pages/settings.py", title="Settings", icon=":material/settings:"),
         ],
         position="top",
@@ -92,6 +94,7 @@ def main() -> None:
 
     render_ollama_banner()
     page.run()
+    render_chat_sidebar(context=st.session_state.get("chat_context"))
 
 
 if __name__ == "__main__":
