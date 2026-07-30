@@ -83,5 +83,93 @@ if prior:
             if col2.button("Mark followed", key=f"fol_{r.id}"):
                 recs.set_followed(r.id, True, actor="user")
                 st.rerun()
+    else:
+        st.caption("No recommendations yet.")
+
+st.divider()
+st.subheader("Multi-month trend narrative")
+n_months = st.selectbox(
+    "Months to analyze", [3, 6, 12], index=0, key="trend_n_months"
+)
+if st.button("Generate trend narrative"):
+    from local_ledger.analysis.multimonth import build_multimonth_payload
+    from local_ledger.analysis.narrative import generate_trend_narrative
+
+    target_months: list[str] = []
+    y, m = (int(x) for x in month.split("-"))
+    for _ in range(n_months):
+        target_months.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    target_months.reverse()
+
+    summaries = [trends.month_summary(mo) for mo in target_months]
+    payload = build_multimonth_payload(months=target_months, summaries=summaries)
+
+    if degraded:
+        st.warning(degraded)
+    else:
+        try:
+            from local_ledger.llm.providers import get_local_client, load_settings
+            from local_ledger.llm.structured import make_openai_completer
+
+            settings = load_settings(session)
+            client = get_local_client(settings)
+            completer = make_openai_completer(client)
+            narrative = generate_trend_narrative(
+                payload, completer=completer, model=settings.local_model
+            )
+            st.markdown(f"**{narrative.summary}**")
+            if narrative.key_trends:
+                st.markdown("**Key trends**")
+                for t in narrative.key_trends:
+                    st.markdown(f"- {t}")
+            if narrative.projections:
+                st.markdown("**Projections**")
+                for p in narrative.projections:
+                    st.markdown(f"- {p}")
+            if narrative.warnings:
+                st.markdown("**Warnings**")
+                for w in narrative.warnings:
+                    st.warning(w)
+            recs.save(
+                month=month,
+                provider="ollama",
+                model=settings.local_model,
+                prompt_hash=recs.hash_prompt(narrative.summary),
+                body=narrative.summary,
+            )
+            st.success("Narrative saved to history.")
+        except Exception as exc:
+            st.error(f"Narrative failed: {exc}")
+
+st.divider()
+st.subheader("What-if scenarios")
+if summary.per_category:
+    from local_ledger.analysis.scenarios import what_if_scenario
+
+    for cat in summary.per_category:
+        col1, col2 = st.columns([2, 3])
+        col1.markdown(f"**{cat.name}** (${cat.spent / 100:,.0f}/mo)")
+        pct = col2.slider(
+            f"Adjust {cat.name}",
+            min_value=-50,
+            max_value=50,
+            value=0,
+            step=5,
+            format="%d%%",
+            key=f"whatif_{cat.category_id}",
+            label_visibility="collapsed",
+        )
+        if pct != 0:
+            result = what_if_scenario(summary, cat.category_id, pct / 100, months_remaining=11)
+            st.caption(
+                f"{cat.name}: ${result.original_spent / 100:,.0f}/mo → "
+                f"${result.adjusted_spent / 100:,.0f}/mo "
+                f"(saves ${result.savings_delta_cents / 100:,.0f}/mo, "
+                f"${result.year_end_delta_cents / 100:,.0f} by year end)"
+            )
 else:
-    st.caption("No recommendations yet.")
+    st.caption("No budget data for this month.")
