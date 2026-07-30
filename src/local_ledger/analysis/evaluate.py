@@ -8,6 +8,7 @@ builds an aggregates-only payload and runs structured extraction.
 
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -16,8 +17,9 @@ from local_ledger.analysis.payloads import EvaluationPayload, to_prompt
 from local_ledger.ledger.trends import MonthSummary
 from local_ledger.llm.structured import StructuredOutputError, extract
 
-OVERSPEND_THRESHOLD = 1.10  # spent > 110% of budget
-DRIFT_THRESHOLD = 0.50  # category spend changed > 50% MoM
+OVERSPEND_THRESHOLD = 1.10
+DRIFT_THRESHOLD = 0.50
+OUTLIER_STDEV = 3.0
 
 
 @dataclass
@@ -42,24 +44,74 @@ class BudgetEvaluation(BaseModel):
     suggested_actions: list[str] = []
 
 
-def deterministic_evaluate(summary: MonthSummary) -> DeterministicEvaluation:
+def deterministic_evaluate(
+    summary: MonthSummary,
+    *,
+    prior_summary: MonthSummary | None = None,
+    transactions: list | None = None,
+) -> DeterministicEvaluation:
     result = DeterministicEvaluation(
         month=summary.month,
         income_cents=summary.income_cents,
         spent_cents=summary.spent_cents,
         budgeted_cents=summary.budgeted_cents,
     )
+
+    prior_spent = {c.category_id: c.spent for c in prior_summary.per_category} if prior_summary else {}
+
     for c in summary.per_category:
         if c.budgeted > 0 and c.spent > c.budgeted * OVERSPEND_THRESHOLD:
             result.anomalies.append(
                 Anomaly(
                     kind="overspend",
                     category_id=c.category_id,
-                    detail=f"category {c.category_id} spent {c.spent} on a {c.budgeted} budget",
+                    detail=f"{c.name} spent {c.spent} on a {c.budgeted} budget",
                 )
             )
-        # outlier single transaction within the month: spent >> 3x typical per-day avg
-        # (approximated: a single category's monthly spent that is itself an outlier vs budget)
+
+        if c.category_id in prior_spent and prior_spent[c.category_id] > 0:
+            change = abs(c.spent - prior_spent[c.category_id]) / prior_spent[c.category_id]
+            if change > DRIFT_THRESHOLD:
+                direction = "up" if c.spent > prior_spent[c.category_id] else "down"
+                result.anomalies.append(
+                    Anomaly(
+                        kind="drift",
+                        category_id=c.category_id,
+                        detail=f"{c.name} spend {direction} {change:.0%} MoM "
+                        f"({prior_spent[c.category_id]} -> {c.spent})",
+                    )
+                )
+
+    if transactions:
+        by_cat: dict[int | None, list[int]] = {}
+        for tx in transactions:
+            m = tx.date[:7]
+            if m != summary.month:
+                continue
+            by_cat.setdefault(tx.category_id, []).append(abs(tx.amount_cents))
+        for cat_id, amounts in by_cat.items():
+            if len(amounts) < 2:
+                continue
+            mean = statistics.mean(amounts)
+            stdev = statistics.stdev(amounts)
+            if stdev == 0:
+                continue
+            for amt in amounts:
+                if (amt - mean) / stdev > OUTLIER_STDEV:
+                    cat_name = next(
+                        (c.name for c in summary.per_category if c.category_id == cat_id),
+                        f"category_{cat_id}",
+                    )
+                    result.anomalies.append(
+                        Anomaly(
+                            kind="outlier",
+                            category_id=cat_id,
+                            detail=f"{cat_name} has a single transaction of {amt} "
+                            f"(mean {mean:.0f}, stdev {stdev:.0f})",
+                        )
+                    )
+                    break
+
     return result
 
 

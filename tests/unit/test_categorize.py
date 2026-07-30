@@ -136,3 +136,51 @@ def test_batch_size_cap(svc: CategorizationService, session: Session) -> None:
         batch_size=4,
     )
     assert calls["n"] == 3  # ceil(10/4)
+
+
+def test_cloud_path_blocked(svc: CategorizationService, session: Session) -> None:
+    """Categorization requires payee data which cannot leave the machine."""
+    from local_ledger.llm import providers
+
+    acc = make_account(session)
+    food = make_category(session, "Food")
+    tx = make_transaction(session, acc.id, amount_cents=-500, category_id=None)
+    session.commit()
+
+    with pytest.raises(providers.CloudCallBlocked):
+        svc.propose_categories(
+            tx_ids=[tx.id],
+            categories=[food],
+            completer=lambda _m, _mo: json.dumps({"proposals": []}),
+            model="m",
+            provider="cloud",
+        )
+
+
+def test_prompt_does_not_contain_raw_notes(svc: CategorizationService, session: Session) -> None:
+    """The categorize prompt must never include raw transaction notes."""
+    acc = make_account(session)
+    food = make_category(session, "Food")
+    tx = make_transaction(
+        session, acc.id, amount_cents=-500, category_id=None
+    )
+    tx.notes = "SECRET PERSONAL NOTE about Dr. John Smith at 123 Main St"
+    session.add(tx)
+    session.commit()
+
+    captured = {}
+
+    def capturing_completer(messages, _model):
+        captured["prompt"] = messages[1]["content"]
+        return json.dumps({"proposals": [{"transaction_id": tx.id, "category_id": food.id, "confidence": 0.9}]})
+
+    svc.propose_categories(
+        tx_ids=[tx.id],
+        categories=[food],
+        completer=capturing_completer,
+        model="m",
+    )
+    prompt = captured.get("prompt", "")
+    assert "SECRET PERSONAL NOTE" not in prompt
+    assert "Dr. John Smith" not in prompt
+    assert "123 Main St" not in prompt

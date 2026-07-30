@@ -19,6 +19,7 @@ from local_ledger.models import Category, CategoryBudget, Transaction
 @dataclass
 class CategoryMonth:
     category_id: int
+    name: str
     budgeted: int
     spent: int
     balance: int
@@ -111,6 +112,7 @@ class TrendsService:
             summary.per_category.append(
                 CategoryMonth(
                     category_id=cat.id,
+                    name=cat.name,
                     budgeted=budgeted,
                     spent=spent,
                     balance=budgeted - spent + carryover,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from local_ledger.analysis.evaluate import (
     BudgetEvaluation,
@@ -94,3 +94,45 @@ def test_llm_interpret_cloud_path_blocked_without_consent(session: Session) -> N
 
     with pytest.raises(providers.CloudCallBlocked):
         llm_interpret(payload, completer=None, model="m", provider="cloud", consent_token=None, settings=None)  # type: ignore[arg-type]
+
+
+def test_drift_detection_flags_mom_change(session: Session) -> None:
+    from local_ledger.ledger.trends import CategoryMonth, MonthSummary, TrendsService
+
+    _seed(session)
+    trends = TrendsService(session)
+    current = trends.month_summary("2026-01")
+    prior = MonthSummary(
+        month="2025-12",
+        income_cents=0,
+        spent_cents=0,
+        budgeted_cents=0,
+        per_category=[
+            CategoryMonth(category_id=c.category_id, name=c.name, budgeted=0, spent=1000, balance=0, carryover=0)
+            for c in current.per_category
+        ],
+    )
+    result = deterministic_evaluate(current, prior_summary=prior)
+    drifts = [a for a in result.anomalies if a.kind == "drift"]
+    assert len(drifts) > 0
+
+
+def test_outlier_detection_flags_3sigma_transaction(session: Session) -> None:
+    from local_ledger.ledger.trends import TrendsService
+    from local_ledger.models import Transaction
+
+    acc, food = _seed(session)
+    for i in range(20):
+        make_transaction(
+            session, acc.id, amount_cents=-(1000 + i * 10),
+            date=f"2026-01-{(i % 27) + 1:02d}", category_id=food.id,
+        )
+    make_transaction(session, acc.id, amount_cents=-100000, date="2026-01-28", category_id=food.id)
+    session.commit()
+
+    trends = TrendsService(session)
+    summary = trends.month_summary("2026-01")
+    txns = list(session.exec(select(Transaction).where(Transaction.date.startswith("2026-01"))).all())
+    result = deterministic_evaluate(summary, transactions=txns)
+    outliers = [a for a in result.anomalies if a.kind == "outlier"]
+    assert len(outliers) > 0

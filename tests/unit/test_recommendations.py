@@ -61,7 +61,7 @@ def test_service_exposes_no_body_update_path() -> None:
     assert not (forbidden & methods), f"service must not expose body-update methods: {forbidden & methods}"
 
 
-def test_followup_report_matches_trends(svc: RecommendationService, session: Session) -> None:
+def test_followup_report_includes_measured_delta(svc: RecommendationService, session: Session) -> None:
     """Follow-up numbers come from the trends engine, not stored."""
     acc = make_account(session)
     food = make_category(session, "Food")
@@ -69,9 +69,19 @@ def test_followup_report_matches_trends(svc: RecommendationService, session: Ses
     session.commit()
 
     rec = svc.save(month="2026-01", provider="p", model="m", prompt_hash="h", body="Reduce Food spend")
-    report = svc.followup_report(current_month="2026-02", trends_factory=lambda s: None)  # trends optional
-    # report lists the prior recommendation with its measured delta placeholder
-    assert any(item.recommendation_id == rec.id for item in report)
+    from local_ledger.ledger.trends import TrendsService
+
+    trends = TrendsService(session)
+
+    def factory(month: str):
+        return trends.month_summary(month)
+
+    report = svc.followup_report(current_month="2026-02", trends_factory=factory)
+    assert len(report) == 1
+    item = report[0]
+    assert item.recommendation_id == rec.id
+    assert item.current_month_spent_cents == 8000  # measured from trends, not stored
+    assert item.current_month_budgeted_cents is not None
 
 
 def test_diff_view_returns_two_months(svc: RecommendationService, session: Session) -> None:

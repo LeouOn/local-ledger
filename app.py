@@ -8,15 +8,38 @@ navigation over app_pages/.
 from __future__ import annotations
 
 import os
+import sys
 
 _LOOPBACK_ADDRESSES = {"127.0.0.1", "localhost", "::1"}
 
 
+def _address_from_argv() -> str | None:
+    for i, arg in enumerate(sys.argv):
+        if arg == "--server.address" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if arg.startswith("--server.address="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def _effective_bind_address() -> str:
-    explicit = os.environ.get("STREAMLIT_SERVER_ADDRESS")
-    if explicit:
-        return explicit
-    return "localhost"
+    # CLI flag is the primary attack vector (--server.address 0.0.0.0); check it
+    # first, then the env var, then Streamlit's resolved config, then default.
+    return (
+        _address_from_argv()
+        or os.environ.get("STREAMLIT_SERVER_ADDRESS")
+        or _streamlit_config_address()
+        or "localhost"
+    )
+
+
+def _streamlit_config_address() -> str | None:
+    try:
+        from streamlit import config as _st_config
+
+        return _st_config.get_option("server.address") or None
+    except Exception:
+        return None
 
 
 def assert_localhost_bind() -> None:
@@ -35,6 +58,18 @@ def main() -> None:
     import streamlit as st
 
     from local_ledger.ui.chrome import render_ollama_banner
+
+    # Runtime guard: by now Streamlit has parsed ALL flags/config/env. This
+    # catches --server.address 0.0.0.0 that the import-time guard cannot see.
+    resolved = _streamlit_config_address()
+    if resolved and resolved not in _LOOPBACK_ADDRESSES:
+        st.set_page_config(page_title="Local Ledger - REFUSED")
+        st.error(
+            f"REFUSING TO SERVE on non-localhost address {resolved!r}. "
+            "Local Ledger is single-user localhost-only by design. "
+            "Remove the --server.address flag or set it to 127.0.0.1."
+        )
+        st.stop()
 
     st.set_page_config(page_title="Local Ledger", page_icon="📒", layout="wide")
 

@@ -130,3 +130,16 @@ def test_payload_truncates_categories_to_respect_cap(session: Session) -> None:
     assert len(enc.encode(prompt)) <= PAYLOAD_TOKEN_CAP
     # truncation flag set
     assert payload.truncated is True
+
+
+def test_payload_uses_real_category_names_not_placeholders(session: Session) -> None:
+    """Oracle #8: the cloud payload must carry real category names, not category_<id>."""
+    _seed_ledger(session)
+    trends = TrendsService(session)
+    summary = trends.month_summary("2026-01")
+    payload = build_evaluation_payload(
+        month="2026-01", summary=summary, mom_income=[], mom_spent=[]
+    )
+    names = [c.name for c in payload.categories]
+    assert "Food" in names
+    assert not any(n.startswith("category_") for n in names)

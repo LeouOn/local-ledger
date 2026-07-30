@@ -24,6 +24,8 @@ class FollowupItem:
     month: str
     body: str
     followed: bool | None
+    current_month_spent_cents: int | None = None
+    current_month_budgeted_cents: int | None = None
 
 
 class RecommendationService:
@@ -96,12 +98,22 @@ class RecommendationService:
         prior = list(
             self.session.exec(select(Recommendation).where(Recommendation.month < current_month)).all()
         )
+        spent = budgeted = None
+        if trends_factory is not None:
+            try:
+                summary = trends_factory(current_month)
+                spent = summary.spent_cents
+                budgeted = summary.budgeted_cents
+            except Exception:
+                pass
         return [
             FollowupItem(
                 recommendation_id=r.id,
                 month=r.month,
                 body=r.body,
                 followed=r.followed,
+                current_month_spent_cents=spent,
+                current_month_budgeted_cents=budgeted,
             )
             for r in prior
         ]

@@ -75,7 +75,7 @@ def _from_summary(
     # the UI layer substitute real names. Numbers are what the LLM reasons over.
     cats = [
         CategoryPayload(
-            name=f"category_{c.category_id}",
+            name=c.name,
             budgeted=c.budgeted,
             spent=c.spent,
             balance=c.balance,

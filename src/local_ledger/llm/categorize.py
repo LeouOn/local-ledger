@@ -15,7 +15,7 @@ from sqlmodel import Session, select
 from local_ledger.db import transaction_with_retry
 from local_ledger.ledger import audit
 from local_ledger.llm.structured import StructuredOutputError, extract
-from local_ledger.models import Category, Transaction
+from local_ledger.models import Category, Payee, Transaction
 
 CONFIDENCE_REVIEW_THRESHOLD = 0.7
 DEFAULT_BATCH_SIZE = 50
@@ -53,15 +53,43 @@ class CategorizationService:
         dry_run: bool = True,
         batch_size: int = DEFAULT_BATCH_SIZE,
         max_retries: int = 2,
+        provider: str = "local",
     ) -> list[CategorizationProposal]:
+        if provider == "cloud":
+            from local_ledger.llm.providers import CloudCallBlocked
+
+            raise CloudCallBlocked(
+                "auto-categorization requires payee data which cannot leave the machine; "
+                "use the local provider"
+            )
         known_ids = {c.id for c in categories}
         category_menu = ", ".join(f"{c.id}:{c.name}" for c in categories)
         proposals: list[CategorizationProposal] = []
 
+        payee_map = {p.id: p.name for p in list(self.session.exec(select(Payee)).all())}
+
+        historical = list(
+            self.session.exec(
+                select(Transaction.payee_id, Transaction.category_id).where(
+                    Transaction.category_id.is_not(None),
+                    Transaction.payee_id.is_not(None),
+                )
+            ).all()
+        )
+        examples = {}
+        for payee_id, cat_id in historical:
+            if payee_id and payee_id not in examples and len(examples) < 20:
+                examples[payee_id] = cat_id
+        example_lines = "; ".join(
+            f"{payee_map.get(pid, f'payee_{pid}')}->{cat_id}" for pid, cat_id in examples.items()
+        )
+
         for start in range(0, len(tx_ids), batch_size):
             chunk = tx_ids[start : start + batch_size]
             txs = list(self.session.exec(select(Transaction).where(Transaction.id.in_(chunk))).all())
-            tx_lines = "; ".join(f"{t.id}|{t.amount_cents}|{t.notes or ''}" for t in txs)
+            tx_lines = "; ".join(
+                f"{t.id}|{t.amount_cents}|{payee_map.get(t.payee_id, 'unknown')}" for t in txs
+            )
             messages = [
                 {
                     "role": "system",
@@ -71,7 +99,7 @@ class CategorizationService:
                         '"confidence": float}]}. Use only the listed category_ids.'
                     ),
                 },
-                {"role": "user", "content": f"menu: {category_menu}\ntransactions: {tx_lines}"},
+                {"role": "user", "content": f"menu: {category_menu}\nexamples: {example_lines}\ntransactions: {tx_lines}"},
             ]
             try:
                 parsed = extract(completer, _ProposalBatch, messages, model, max_retries=max_retries)
