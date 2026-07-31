@@ -64,9 +64,9 @@ def project_forward(
             next((c.spent for c in s.per_category if c.category_id == cat_id), 0)
             for s in summaries
         )
-        avg_spent[cat_id] = total // n
+        avg_spent[cat_id] = round(total / n)
 
-    avg_income = sum(s.income_cents for s in summaries) // n
+    avg_income = round(sum(s.income_cents for s in summaries) / n)
 
     projections: list[ProjectedMonth] = []
     for i in range(1, months_ahead + 1):

@@ -54,13 +54,7 @@ class GoalService:
             self.session.commit()
 
     def current_progress(self, goal: SavingsGoal) -> GoalProgress:
-        txns = list(
-            self.session.exec(
-                select(Transaction).where(
-                    Transaction.date >= goal.created_at.strftime("%Y-%m-%d")
-                )
-            ).all()
-        )
+        txns = list(self.session.exec(select(Transaction)).all())
         income = sum(t.amount_cents for t in txns if t.amount_cents > 0)
         expenses = sum(-t.amount_cents for t in txns if t.amount_cents < 0)
         current = income - expenses

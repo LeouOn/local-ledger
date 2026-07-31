@@ -21,6 +21,13 @@ recs = RecommendationService(session)
 month = st.text_input("Month (YYYY-MM)", value="2026-01", key="insights_month")
 summary = trends.month_summary(month)
 
+# Inject context for the persistent chat sidebar so the LLM can reference
+# the current month's aggregates when answering questions.
+lines = [f"Month {month}: income ${summary.income_cents / 100:,.0f}, spent ${summary.spent_cents / 100:,.0f}, budgeted ${summary.budgeted_cents / 100:,.0f}."]
+for c in summary.per_category:
+    lines.append(f"  {c.name}: budgeted ${c.budgeted / 100:,.0f}, spent ${c.spent / 100:,.0f}, balance ${c.balance / 100:,.0f}.")
+st.session_state["chat_context"] = {"month": month, "summary_text": "\n".join(lines)}
+
 st.subheader("Deterministic findings")
 evaluation = deterministic_evaluate(summary)
 if evaluation.anomalies:

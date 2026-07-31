@@ -28,6 +28,40 @@ def _build_context_text(context: dict | None) -> str:
     return "\n".join(parts)
 
 
+def generate_chat_response(
+    prompt: str,
+    context: dict | None,
+    *,
+    completer,
+    model: str,
+) -> str:
+    """Generate an LLM response to a budget question using aggregate context.
+
+    Testable core of the chat sidebar: builds the prompt from context + question,
+    calls the LLM, and returns the text answer. Raises on LLM failure so callers
+    can degrade gracefully.
+    """
+    context_text = _build_context_text(context)
+    user_message = f"{context_text}\n\nUser question: {prompt}" if context_text else prompt
+
+    class _ChatResponse(BaseModel):
+        answer: str
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a budget assistant. Answer the user's question using ONLY "
+                "the provided aggregate financial data. Never invent numbers. Keep "
+                "answers concise and actionable."
+            ),
+        },
+        {"role": "user", "content": user_message},
+    ]
+    response = extract(completer, _ChatResponse, messages, model)
+    return response.answer
+
+
 def render_chat_sidebar(context: dict | None = None) -> None:
     """Render the persistent chat sidebar. Call this from app.py main()."""
     session = get_session()
@@ -56,28 +90,9 @@ def render_chat_sidebar(context: dict | None = None) -> None:
                     settings = load_settings(session)
                     client = get_local_client(settings)
                     completer = make_openai_completer(client)
-
-                    context_text = _build_context_text(context)
-                    user_message = (
-                        f"{context_text}\n\nUser question: {prompt}" if context_text else prompt
+                    assistant_msg = generate_chat_response(
+                        prompt, context, completer=completer, model=settings.local_model
                     )
-
-                    class _ChatResponse(BaseModel):
-                        answer: str
-
-                    messages = [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a budget assistant. Answer the user's question using "
-                                "ONLY the provided aggregate financial data. Never invent numbers. "
-                                "Keep answers concise and actionable."
-                            ),
-                        },
-                        {"role": "user", "content": user_message},
-                    ]
-                    response = extract(completer, _ChatResponse, messages, settings.local_model)
-                    assistant_msg = response.answer
                 except Exception as exc:
                     assistant_msg = f"Sorry, I couldn't process that: {exc}"
 
