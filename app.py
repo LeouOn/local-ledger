@@ -87,6 +87,7 @@ def main() -> None:
             st.Page("app_pages/import_.py", title="Import", icon=":material/upload_file:"),
             st.Page("app_pages/insights.py", title="Insights", icon=":material/insights:"),
             st.Page("app_pages/goals.py", title="Goals", icon=":material/flag:"),
+            st.Page("app_pages/rules.py", title="Rules", icon=":material/rule:"),
             st.Page("app_pages/settings.py", title="Settings", icon=":material/settings:"),
         ],
         position="top",
