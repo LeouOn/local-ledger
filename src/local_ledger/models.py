@@ -264,3 +264,36 @@ class ChatMessage(SQLModel, table=True):
         if v not in ("user", "assistant"):
             raise ValueError("role must be 'user' or 'assistant'")
         return v
+
+
+class Rule(SQLModel, table=True):
+    model_config = ConfigDict(validate_assignment=True)
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    payee_contains: str | None = None
+    amount_min: int | None = None  # cents, inclusive
+    amount_max: int | None = None  # cents, inclusive
+    notes_contains: str | None = None
+    category_id: int = Field(foreign_key="category.id")
+    priority: int = Field(default=0)  # higher applies first
+    created_at: datetime = Field(default_factory=_utcnow)
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name must not be empty")
+        return v.strip()
+
+    @field_validator("amount_min", "amount_max", mode="before")
+    @classmethod
+    def _check_amounts(cls, v: object) -> int | None:
+        if v is None:
+            return None
+        if isinstance(v, (bool, float)):
+            raise ValueError("amounts must be int cents or None")
+        if not isinstance(v, int):
+            raise ValueError("amounts must be int cents or None")
+        if v < 0:
+            raise ValueError("amounts must be non-negative")
+        return v
