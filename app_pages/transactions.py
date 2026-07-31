@@ -148,3 +148,22 @@ if filtered:
         st.rerun()
 else:
     st.caption("No transactions for bulk actions.")
+
+st.divider()
+st.subheader("Recurring transactions")
+if st.button("Detect recurring transactions"):
+    from local_ledger.automation.recurring import detect_recurrences
+
+    all_txs = list(session.exec(select(Transaction)).all())
+    groups = detect_recurrences(all_txs)
+    if groups:
+        for g in sorted(groups, key=lambda x: -x.confidence):
+            st.write(
+                f"**{g.payee}** - ${g.amount_cents / 100:,.2f} every ~{g.interval_days} days "
+                f"(confidence {g.confidence:.0%}, {len(g.transaction_ids)} occurrences)"
+            )
+    else:
+        st.caption(
+            "No recurring transactions detected "
+            "(need 3+ similar payee/amount/interval)."
+        )
