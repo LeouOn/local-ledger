@@ -49,6 +49,11 @@ if goals:
                 f"${progress.current_cents / 100:,.0f} saved ({progress.pct:.0f}%) · "
                 f"Projected: {achievement or 'never'}"
             )
+            if progress.behind_plan and progress.monthly_rate_cents > 0:
+                st.caption(
+                    f":red[Behind plan: saving ${progress.monthly_rate_cents / 100:,.0f}/mo "
+                    f"vs planned ${progress.planned_rate_cents / 100:,.0f}/mo]"
+                )
             if st.button("Delete", key=f"del_goal_{goal.id}"):
                 service.delete_goal(goal.id)
                 st.rerun()

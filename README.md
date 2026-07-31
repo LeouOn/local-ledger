@@ -12,13 +12,21 @@ while remembering its own suggestions so you can see whether they helped.
 - **Budget** per category with optional month-to-month carryover (supports both
   envelope and category-budgeting styles).
 - **Evaluate** your budget: deterministic anomaly detection (overspend, MoM
-  drift) runs always; an on-demand LLM interpretation adds a written summary and
-  suggested actions.
+  drift, outlier transactions) runs always; an on-demand LLM interpretation adds
+  a written summary and suggested actions.
+- **Explore what-ifs** — adjust any category with a slider and see the projected
+  savings impact instantly.
 - **Track** recommendations over time — each suggestion is stored append-only,
   and you mark whether you followed it.
-- **Auto-categorize** imported transactions (dry-run default, low-confidence and
-  unknown-category proposals routed to a review queue; nothing is created
-  silently).
+- **Auto-categorize** imported transactions deterministically (rules engine) and
+  via LLM (dry-run default, low-confidence and unknown-category proposals routed
+  to a review queue; nothing is created silently).
+- **Detect recurring transactions** — subscriptions and regular bills grouped by
+  payee, amount, and interval with a confidence score.
+- **Save toward goals** — set a target amount and date; the app tracks progress,
+  projects achievement, and flags when you're behind schedule.
+- **Chat about your budget** — a persistent sidebar assistant answers questions
+  using only your aggregate data (never raw transactions).
 
 ## Privacy posture
 
@@ -128,10 +136,10 @@ change:
 .venv\Scripts\alembic revision --autogenerate -m "describe change"
 ```
 
-## Scope boundaries (v1)
+## Scope boundaries
 
 Not included: bank aggregation/Plaid/sync, multi-user or hosting, double-entry
-accounting, investments, recurring-transaction auto-detection, multi-currency,
-in-app chat, PDF/XLS import, or sending anything but aggregates to the cloud.
+accounting, investments, multi-currency, PDF/XLS import, or sending anything but
+aggregates to the cloud.
 
 The full design and decision trail lives in `.omo/plans/local-ledger.md`.

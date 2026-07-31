@@ -93,8 +93,11 @@ def render_chat_sidebar(context: dict | None = None) -> None:
                     assistant_msg = generate_chat_response(
                         prompt, context, completer=completer, model=settings.local_model
                     )
-                except Exception as exc:
-                    assistant_msg = f"Sorry, I couldn't process that: {exc}"
+                except Exception:
+                    assistant_msg = (
+                        "Sorry, I couldn't process that. Check that the local model is "
+                        "running and try again."
+                    )
 
             chat.add_message("assistant", assistant_msg)
             with st.chat_message("assistant"):

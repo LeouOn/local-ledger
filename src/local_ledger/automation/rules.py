@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlmodel import Session, select
 
+from local_ledger.ledger import audit
 from local_ledger.models import Category, Rule, Transaction
 
 
@@ -32,6 +33,15 @@ class RuleService:
             priority=priority,
         )
         self.session.add(rule)
+        self.session.flush()
+        audit.record(
+            self.session,
+            entity_type="rule",
+            entity_id=rule.id,
+            action="create",
+            actor="user",
+            after=rule,
+        )
         self.session.commit()
         self.session.refresh(rule)
         return rule
@@ -44,6 +54,14 @@ class RuleService:
     def delete_rule(self, rule_id: int) -> None:
         rule = self.session.get(Rule, rule_id)
         if rule is not None:
+            audit.record(
+                self.session,
+                entity_type="rule",
+                entity_id=rule.id,
+                action="delete",
+                actor="user",
+                before=rule,
+            )
             self.session.delete(rule)
             self.session.commit()
 

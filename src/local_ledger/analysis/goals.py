@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session, select
 
+from local_ledger.ledger import audit
 from local_ledger.models import SavingsGoal, Transaction
 
 
@@ -16,6 +17,8 @@ class GoalProgress:
     target_cents: int
     pct: float
     monthly_rate_cents: float
+    planned_rate_cents: float
+    behind_plan: bool
 
 
 class GoalService:
@@ -38,6 +41,15 @@ class GoalService:
             notes=notes,
         )
         self.session.add(goal)
+        self.session.flush()
+        audit.record(
+            self.session,
+            entity_type="savings_goal",
+            entity_id=goal.id,
+            action="create",
+            actor="user",
+            after=goal,
+        )
         self.session.commit()
         self.session.refresh(goal)
         return goal
@@ -50,6 +62,14 @@ class GoalService:
     def delete_goal(self, goal_id: int) -> None:
         goal = self.session.get(SavingsGoal, goal_id)
         if goal is not None:
+            audit.record(
+                self.session,
+                entity_type="savings_goal",
+                entity_id=goal.id,
+                action="delete",
+                actor="user",
+                before=goal,
+            )
             self.session.delete(goal)
             self.session.commit()
 
@@ -72,6 +92,8 @@ class GoalService:
             target_cents=goal.target_cents,
             pct=round(min(pct, 999.9), 1),
             monthly_rate_cents=round(monthly_rate),
+            planned_rate_cents=goal.monthly_contribution_cents,
+            behind_plan=goal.monthly_contribution_cents > round(monthly_rate),
         )
 
     def projected_achievement(self, goal: SavingsGoal) -> str | None:
