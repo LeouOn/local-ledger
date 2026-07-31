@@ -7,7 +7,7 @@ import streamlit as st
 from sqlmodel import select
 
 from local_ledger.ledger.service import LedgerService
-from local_ledger.models import Account, ReviewState, StagedTransaction, Transaction
+from local_ledger.models import Account, Category, ReviewState, StagedTransaction, Transaction
 from local_ledger.ui.chrome import get_session
 
 st.title("Transactions")
@@ -110,3 +110,41 @@ if fuzzy:
         st.success("Accepted — return to Import to commit.")
 else:
     st.caption("No fuzzy dedup candidates.")
+
+st.divider()
+st.subheader("Filters")
+col1, col2, col3 = st.columns(3)
+min_amt = col1.number_input("Min amount ($)", min_value=0.0, value=0.0, step=1.0, key="f_min")
+max_amt = col2.number_input("Max amount ($)", min_value=0.0, value=0.0, step=1.0, key="f_max")
+text = col3.text_input("Search (payee/notes)", value="", key="f_text")
+
+filtered = rows
+if min_amt > 0:
+    filtered = [r for r in filtered if abs(r.amount_cents) >= min_amt * 100]
+if max_amt > 0:
+    filtered = [r for r in filtered if abs(r.amount_cents) <= max_amt * 100]
+if text:
+    needle = text.lower()
+    filtered = [r for r in filtered if needle in (r.notes or "").lower()]
+
+st.subheader("Charts")
+if filtered:
+    cats = {c.id: c.name for c in session.exec(select(Category)).all()}
+    by_cat: dict[str, int] = {}
+    for r in filtered:
+        name = cats.get(r.category_id, "Uncategorized")
+        by_cat[name] = by_cat.get(name, 0) + abs(r.amount_cents)
+    chart_df = pd.DataFrame([{"category": k, "spent": v} for k, v in by_cat.items()])
+    st.bar_chart(chart_df.set_index("category"))
+else:
+    st.caption("No transactions to chart.")
+
+st.subheader("Bulk actions")
+if filtered:
+    if st.button(f"Delete {len(filtered)} filtered transaction(s)"):
+        for tid in [r.id for r in filtered if r.id is not None]:
+            svc.delete_transaction(tid, actor="user")
+        st.success(f"Deleted {len(filtered)} transaction(s).")
+        st.rerun()
+else:
+    st.caption("No transactions for bulk actions.")
