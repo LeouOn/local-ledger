@@ -104,7 +104,7 @@ def test_zero_savings_rate_never_achieves(service: GoalService, session) -> None
 
 def test_list_and_delete_goals(service: GoalService, session) -> None:
     g1 = service.create_goal("A", 100000, "2026-12-31", 10000)
-    g2 = service.create_goal("B", 200000, "2026-12-31", 20000)
+    service.create_goal("B", 200000, "2026-12-31", 20000)
     goals = service.list_goals()
     assert len(goals) == 2
     service.delete_goal(g1.id)
