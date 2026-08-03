@@ -1,0 +1,52 @@
+#!/bin/bash
+# Pre-commit guard: block personal data and secrets from being committed.
+# Install: git config core.hooksPath .githooks (then chmod +x this file)
+# Or: cp this to .git/hooks/pre-commit
+
+set -e
+
+BLOCKED=0
+
+# Check staged files for personal-data patterns
+while IFS= read -r file; do
+    # Block database files
+    case "$file" in
+        *.db|*.db-journal|*.db-wal|*.db-shm)
+            echo "BLOCKED: database file '$file' — personal financial data"
+            BLOCKED=1
+            ;;
+        .env|*.env)
+            echo "BLOCKED: environment file '$file' — may contain API keys"
+            BLOCKED=1
+            ;;
+        .streamlit/secrets.toml)
+            echo "BLOCKED: secrets file '$file' — may contain credentials"
+            BLOCKED=1
+            ;;
+        *.key|*.pem|*.p12)
+            echo "BLOCKED: key file '$file' — may contain private keys"
+            BLOCKED=1
+            ;;
+        data/*)
+            echo "BLOCKED: data directory file '$file' — personal financial data"
+            BLOCKED=1
+            ;;
+    esac
+done < <(git diff --cached --name-only --diff-filter=ACM)
+
+# Check staged content for secret patterns (skip .githooks/ which contains the patterns themselves)
+for pattern in "sk-[a-zA-Z0-9]{20}" "password.*=" "api_key.*=" "BEGIN.*PRIVATE KEY"; do
+    if git diff --cached -U0 -- . ':(exclude).githooks' | grep -qiE "$pattern"; then
+        echo "BLOCKED: staged content matches secret pattern: $pattern"
+        BLOCKED=1
+    fi
+done
+
+if [ "$BLOCKED" -eq 1 ]; then
+    echo ""
+    echo "Commit rejected: personal data or secrets detected in staged files."
+    echo "If this is a false positive, use: git commit --no-verify"
+    exit 1
+fi
+
+exit 0

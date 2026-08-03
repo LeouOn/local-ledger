@@ -6,12 +6,20 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# App data
+# App data — contains real financial transactions
 data/
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Secrets / credentials
+.env
+*.env
+.streamlit/secrets.toml
+*.key
+*.pem
+*.p12
 
 # Evidence (per-session QA artifacts)
 .omo/evidence/
