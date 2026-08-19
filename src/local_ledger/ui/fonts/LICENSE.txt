@@ -1,0 +1,9 @@
+SIL Open Font License v1.1
+
+Font: Alegreya
+Copyright 2011 The Alegreya Project Authors (https://github.com/huertatipografica/Alegreya)
+License: SIL Open Font License, Version 1.1 (https://openfontlicense.org)
+
+This license is copied in the OFL.txt that ships with the font from upstream.
+The font files committed to this repository are licensed under the OFL;
+you may use, study, modify, and redistribute them under the terms of that license.
