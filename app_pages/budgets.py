@@ -10,8 +10,9 @@ from local_ledger.ledger.service import LedgerService
 from local_ledger.ledger.trends import TrendsService
 from local_ledger.models import Account, Category, CategoryBudget
 from local_ledger.ui.chrome import get_session
+from local_ledger.ui.components import section_header
 
-st.title("Budgets")
+section_header("ALLOCATION", "Budgets")
 
 session = get_session()
 svc = LedgerService(session)
@@ -24,7 +25,7 @@ if not accounts:
         st.rerun()
     st.stop()
 
-st.subheader("Accounts")
+section_header("ACCOUNTS", "Accounts")
 for a in accounts:
     st.write(f"- {a.name} ({a.type})")
 
@@ -40,7 +41,7 @@ st.divider()
 categories = list(session.exec(select(Category)).all())
 month = st.text_input("Month (YYYY-MM)", value="2026-01", key="bud_month")
 
-st.subheader(f"Category allocations — {month}")
+section_header("ALLOCATIONS", f"Category allocations — {month}")
 existing = {
     b.category_id: b
     for b in session.exec(select(CategoryBudget).where(CategoryBudget.month == month)).all()

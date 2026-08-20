@@ -9,8 +9,9 @@ from sqlmodel import select
 from local_ledger.ledger.service import LedgerService
 from local_ledger.models import Account, Category, ReviewState, StagedTransaction, Transaction
 from local_ledger.ui.chrome import get_session
+from local_ledger.ui.components import section_header
 
-st.title("Transactions")
+section_header("LEDGER", "Transactions")
 
 session = get_session()
 svc = LedgerService(session)
@@ -93,7 +94,7 @@ with st.expander("Transfer between accounts"):
                     st.error(f"Could not transfer: {exc}")
 
 st.divider()
-st.subheader("Review queues")
+section_header("REVIEW", "Review queues")
 
 st.caption("Dedup (fuzzy) candidates")
 fuzzy = [s for s in session.exec(select(StagedTransaction)).all() if s.dedup_status == "FUZZY"]
@@ -112,7 +113,7 @@ else:
     st.caption("No fuzzy dedup candidates.")
 
 st.divider()
-st.subheader("Filters")
+section_header("FILTER", "Filters")
 col1, col2, col3 = st.columns(3)
 min_amt = col1.number_input("Min amount ($)", min_value=0.0, value=0.0, step=1.0, key="f_min")
 max_amt = col2.number_input("Max amount ($)", min_value=0.0, value=0.0, step=1.0, key="f_max")
@@ -127,7 +128,7 @@ if text:
     needle = text.lower()
     filtered = [r for r in filtered if needle in (r.notes or "").lower()]
 
-st.subheader("Charts")
+section_header("CHARTS", "Charts")
 if filtered:
     cats = {c.id: c.name for c in session.exec(select(Category)).all()}
     by_cat: dict[str, int] = {}
@@ -139,7 +140,7 @@ if filtered:
 else:
     st.caption("No transactions to chart.")
 
-st.subheader("Bulk actions")
+section_header("BULK", "Bulk actions")
 if filtered:
     if st.button(f"Delete {len(filtered)} filtered transaction(s)"):
         for tid in [r.id for r in filtered if r.id is not None]:
@@ -150,7 +151,7 @@ else:
     st.caption("No transactions for bulk actions.")
 
 st.divider()
-st.subheader("Recurring transactions")
+section_header("RECURRING", "Recurring transactions")
 if st.button("Detect recurring transactions"):
     from local_ledger.automation.recurring import detect_recurrences
 

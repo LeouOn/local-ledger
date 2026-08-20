@@ -6,8 +6,9 @@ import streamlit as st
 
 from local_ledger.analysis.goals import GoalService
 from local_ledger.ui.chrome import get_session
+from local_ledger.ui.components import section_header, status_badge
 
-st.title("Savings goals")
+section_header("PROGRESS", "Savings goals")
 
 session = get_session()
 service = GoalService(session)
@@ -29,7 +30,7 @@ with st.expander("Create a new goal"):
             except Exception as exc:
                 st.error(f"Could not create goal: {exc}")
 
-st.subheader("Your goals")
+section_header("GOALS", "Your goals")
 goals = service.list_goals()
 if goals:
     for goal in goals:
@@ -38,12 +39,13 @@ if goals:
         on_track = service.on_track(goal)
 
         status = "On track" if on_track else "Behind schedule"
-        badge = "green" if on_track else "red"
+        tone: str = "ok" if on_track else "bad"
 
         with st.container(border=True):
             col1, col2 = st.columns([3, 1])
             col1.markdown(f"**{goal.name}** — ${goal.target_cents / 100:,.0f} by {goal.target_date}")
-            col2.markdown(f":{badge}[{status}]")
+            with col2:
+                status_badge(status, tone=tone)
             st.progress(min(progress.pct / 100, 1.0))
             st.caption(
                 f"${progress.current_cents / 100:,.0f} saved ({progress.pct:.0f}%) · "
