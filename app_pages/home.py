@@ -8,8 +8,9 @@ import streamlit as st
 from local_ledger.analysis.evaluate import deterministic_evaluate
 from local_ledger.ledger.trends import TrendsService
 from local_ledger.ui.chrome import get_session
+from local_ledger.ui.components import kpi_card, section_header
 
-st.title("Local Ledger")
+section_header("OVERVIEW", "Local Ledger")
 
 session = get_session()
 trends = TrendsService(session)
@@ -18,10 +19,18 @@ month = st.text_input("Month (YYYY-MM)", value="2026-01", key="home_month")
 summary = trends.month_summary(month)
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Income", f"${summary.income_cents / 100:,.2f}")
-col2.metric("Spent", f"${summary.spent_cents / 100:,.2f}")
-col3.metric("Budgeted", f"${summary.budgeted_cents / 100:,.2f}")
-col4.metric("Net", f"${(summary.income_cents - summary.spent_cents) / 100:,.2f}")
+with col1:
+    kpi_card("Income", f"${summary.income_cents / 100:,.2f}")
+with col2:
+    kpi_card("Spent", f"${summary.spent_cents / 100:,.2f}")
+with col3:
+    kpi_card("Budgeted", f"${summary.budgeted_cents / 100:,.2f}")
+with col4:
+    kpi_card(
+        "Net",
+        f"${(summary.income_cents - summary.spent_cents) / 100:,.2f}",
+        status="ok" if summary.income_cents >= summary.spent_cents else "bad",
+    )
 
 if summary.per_category:
     df = pd.DataFrame(
@@ -36,15 +45,15 @@ if summary.per_category:
             for c in summary.per_category
         ]
     )
-    st.subheader("Budget vs actual")
+    section_header("BUDGET", "Budget vs actual")
     st.bar_chart(df.set_index("category")[["budgeted", "spent"]])
 
-    st.subheader("Trend (6 months)")
+    section_header("TREND", "6-month trend")
     deltas = trends.mom_deltas(month, n=6)
     trend_df = pd.DataFrame(deltas, columns=["month", "income", "spent"])
     st.line_chart(trend_df.set_index("month"))
 
-    st.subheader("Anomalies")
+    section_header("FINDINGS", "Anomalies")
     evaluation = deterministic_evaluate(summary)
     if evaluation.anomalies:
         for a in evaluation.anomalies:

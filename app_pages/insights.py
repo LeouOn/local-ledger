@@ -11,8 +11,9 @@ from local_ledger.analysis.recommendations import RecommendationService
 from local_ledger.ledger.trends import TrendsService
 from local_ledger.models import Recommendation
 from local_ledger.ui.chrome import degraded_message, get_session
+from local_ledger.ui.components import section_header, status_badge
 
-st.title("Insights")
+section_header("ANALYSIS", "Insights")
 
 session = get_session()
 trends = TrendsService(session)
@@ -28,7 +29,7 @@ for c in summary.per_category:
     lines.append(f"  {c.name}: budgeted ${c.budgeted / 100:,.0f}, spent ${c.spent / 100:,.0f}, balance ${c.balance / 100:,.0f}.")
 st.session_state["chat_context"] = {"month": month, "summary_text": "\n".join(lines)}
 
-st.subheader("Deterministic findings")
+section_header("EVAL", "Deterministic findings")
 evaluation = deterministic_evaluate(summary)
 if evaluation.anomalies:
     for a in evaluation.anomalies:
@@ -37,7 +38,7 @@ else:
     st.success("No anomalies detected.")
 
 st.divider()
-st.subheader("LLM interpretation")
+section_header("INTERPRET", "LLM interpretation")
 degraded = degraded_message("evaluate")
 provider = st.radio("Provider", ["local", "cloud (opt-in)"], horizontal=True, key="insights_provider")
 if st.button("Evaluate my budget"):
@@ -76,16 +77,18 @@ if st.button("Evaluate my budget"):
             st.error(f"Interpretation failed: {exc}")
 
 st.divider()
-st.subheader("Recommendation history")
+section_header("HISTORY", "Recommendation history")
 prior = list(session.exec(select(Recommendation)).all())
 if prior:
     for r in sorted(prior, key=lambda x: x.created_at, reverse=True):
         col1, col2 = st.columns([4, 1])
         col1.write(f"[{r.month}] {r.body}")
         if r.followed is True:
-            col2.success("followed")
+            with col2:
+                status_badge("followed", tone="ok")
         elif r.followed is False:
-            col2.error("not followed")
+            with col2:
+                status_badge("not followed", tone="bad")
         else:
             if col2.button("Mark followed", key=f"fol_{r.id}"):
                 recs.set_followed(r.id, True, actor="user")
@@ -94,7 +97,7 @@ if prior:
         st.caption("No recommendations yet.")
 
 st.divider()
-st.subheader("Multi-month trend narrative")
+section_header("TREND", "Multi-month narrative")
 n_months = st.selectbox(
     "Months to analyze", [3, 6, 12], index=0, key="trend_n_months"
 )
@@ -153,7 +156,7 @@ if st.button("Generate trend narrative"):
             st.error(f"Narrative failed: {exc}")
 
 st.divider()
-st.subheader("What-if scenarios")
+section_header("WHAT IF", "Scenarios")
 if summary.per_category:
     from local_ledger.analysis.scenarios import what_if_scenario
 
