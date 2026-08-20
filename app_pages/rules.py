@@ -8,8 +8,9 @@ from sqlmodel import select
 from local_ledger.automation.rules import RuleService
 from local_ledger.models import Category
 from local_ledger.ui.chrome import get_session
+from local_ledger.ui.components import section_header
 
-st.title("Rules")
+section_header("AUTOMATION", "Rules")
 
 session = get_session()
 svc = RuleService(session)
@@ -49,7 +50,7 @@ with st.expander("Create a rule"):
             except Exception as exc:
                 st.error(f"Could not create rule: {exc}")
 
-st.subheader("Your rules")
+section_header("RULES", "Your rules")
 rules = svc.list_rules()
 if rules:
     for rule in rules:

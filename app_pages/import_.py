@@ -11,8 +11,9 @@ from local_ledger.ingest.importer import ImportService
 from local_ledger.llm.paste_parse import PasteParseService
 from local_ledger.models import Account, StagedTransaction
 from local_ledger.ui.chrome import degraded_message, get_session
+from local_ledger.ui.components import section_header
 
-st.title("Import")
+section_header("INGEST", "Import")
 
 session = get_session()
 importer = ImportService(session)
@@ -26,7 +27,7 @@ if not accounts:
 csv_tab, paste_tab = st.tabs(["CSV import", "Paste statement"])
 
 with csv_tab:
-    st.subheader("CSV import")
+    section_header("CSV", "CSV import")
     acc = st.selectbox("Account", accounts, format_func=lambda a: a.name, key="csv_acc")
     uploaded = st.file_uploader("CSV file", type=["csv"])
     if uploaded is not None:
@@ -71,7 +72,7 @@ with csv_tab:
             st.success("Committed.")
 
 with paste_tab:
-    st.subheader("Paste a statement or budget")
+    section_header("PASTE", "Paste a statement or budget")
     degraded = degraded_message("paste_parse")
     if degraded:
         st.warning(degraded)

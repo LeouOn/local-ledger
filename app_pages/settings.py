@@ -44,7 +44,7 @@ with st.form("local_settings"):
         providers.save_settings(session, local_base_url=local_url, local_model=local_model)
         st.success("Saved.")
 
-st.subheader("Cloud provider (opt-in, per call)")
+section_header("CLOUD", "Cloud provider (opt-in, per call)")
 with st.form("cloud_settings"):
     cloud_url = st.text_input("Cloud base URL", value=settings.cloud_base_url or "")
     cloud_model = st.text_input("Cloud model", value=settings.cloud_model or "")
@@ -66,7 +66,7 @@ payload = build_evaluation_payload(
 preview = preview_payload(payload.model_dump())
 
 st.divider()
-st.subheader("Cloud consent preview")
+section_header("CONSENT", "Cloud consent preview")
 st.caption(
     "Cloud calls send ONLY category names and numeric totals — never raw "
     "transactions, payees, or account numbers. Issue a one-use consent token "
