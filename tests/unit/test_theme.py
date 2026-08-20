@@ -70,3 +70,71 @@ def test_dark_accent_is_teal_500() -> None:
 def test_palette_for_chart_returns_five_strings() -> None:
     # Stash the "current mode" via module-level setter (added in Step 3).
     pass  # implemented in Task 3 — placeholder
+
+
+# -- CSS injection (Task 3) -----------------------------------------------------
+
+from local_ledger.ui.theme import build_css, inject_css  # noqa: E402
+
+
+def test_build_css_returns_parseable_string() -> None:
+    css = build_css("light")
+    assert isinstance(css, str)
+    # No orphan braces
+    assert css.count("{") == css.count("}"), f"unbalanced braces:\n{css}"
+    # Contains at least one selector targeting a Streamlit data-testid
+    assert "[data-testid=" in css
+
+
+def test_build_css_contains_font_face_for_alegreya() -> None:
+    css = build_css("light")
+    assert "@font-face" in css
+    assert "Alegreya" in css
+    # URL must reference the vendored file, not a CDN
+    assert "fonts.gstatic.com" not in css
+    assert "fonts.googleapis.com" not in css
+
+
+def test_build_css_uses_active_token_hex_values() -> None:
+    css_light = build_css("light")
+    css_dark = build_css("dark")
+    # Each must embed its accent hex
+    assert "#0F766E" in css_light  # light accent
+    assert "#14B8A6" in css_dark   # dark accent
+    # And must NOT cross-contaminate
+    assert "#0F766E" not in css_dark
+    assert "#14B8A6" not in css_light
+
+
+def test_build_css_includes_required_selectors() -> None:
+    """Theme must target every surface listed in the spec's CSS coverage table."""
+    css = build_css("light")
+    required = [
+        "stDataFrame",
+        "stDataEditor",
+        "stTextInput",
+        "stMetric",
+        "stAlert",
+        "stSidebar",
+        "stCode",
+        "stVerticalBlock",
+    ]
+    for sel in required:
+        assert sel in css, f"missing selector {sel!r} in CSS"
+
+
+def test_inject_css_calls_st_markdown(monkeypatch) -> None:
+    """inject_css must emit CSS via st.markdown(unsafe_allow_html=True)."""
+    captured: list[str] = []
+
+    import streamlit as st
+
+    def fake_markdown(body, **kwargs):
+        captured.append(body)
+        if "unsafe_allow_html" in kwargs:
+            assert kwargs["unsafe_allow_html"] is True
+
+    monkeypatch.setattr(st, "markdown", fake_markdown)
+    inject_css("dark")
+    assert len(captured) == 1
+    assert "[data-testid=" in captured[0]
