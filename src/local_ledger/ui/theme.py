@@ -392,8 +392,11 @@ def inject_css(mode: Literal["light", "dark"]) -> None:
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
-# -- Stubs to be implemented in Task 4 ---------------------------------------
-
 def apply_chart_colors(chart_call_fn, *args, **kwargs) -> None:
-    """Wrap a chart call so it picks up palette_for_chart() via color=. Implemented in Task 4."""
-    raise NotImplementedError("implemented in Task 4")
+    """Wrap a chart call so it picks up palette_for_chart() via color=.
+
+    If the caller already passed color=, that value is preserved.
+    """
+    if "color" not in kwargs:
+        kwargs["color"] = palette_for_chart()
+    chart_call_fn(*args, **kwargs)

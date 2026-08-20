@@ -6,6 +6,8 @@ from local_ledger.ui.theme import (
     TOKENS_DARK,
     TOKENS_LIGHT,
     ThemeTokens,
+    apply_chart_colors,
+    palette_for_chart,
 )
 
 REQUIRED_COLOR_KEYS = {
@@ -138,3 +140,29 @@ def test_inject_css_calls_st_markdown(monkeypatch) -> None:
     inject_css("dark")
     assert len(captured) == 1
     assert "[data-testid=" in captured[0]
+
+
+def test_apply_chart_colors_injects_color_argument() -> None:
+    """apply_chart_colors must pass color=palette_for_chart() to the chart call."""
+    captured: dict = {}
+
+    def fake_chart(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+    apply_chart_colors(fake_chart, "x", y="y")
+    assert "color" in captured["kwargs"]
+    assert captured["kwargs"]["color"] == palette_for_chart()
+    assert captured["args"] == ("x",)
+    assert captured["kwargs"]["y"] == "y"
+
+
+def test_apply_chart_colors_does_not_overwrite_explicit_color() -> None:
+    """If the caller passed color=, leave it alone."""
+    captured: dict = {}
+
+    def fake_chart(*args, **kwargs):
+        captured.update(kwargs)
+
+    apply_chart_colors(fake_chart, color=["#000000"])
+    assert captured["color"] == ["#000000"]
