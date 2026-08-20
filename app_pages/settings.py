@@ -10,13 +10,31 @@ from local_ledger.llm import providers
 from local_ledger.llm.ollama import GUIDANCE
 from local_ledger.llm.privacy import grant_consent, preview_payload
 from local_ledger.ui.chrome import get_session, ollama_state
+from local_ledger.ui.components import section_header
+from local_ledger.ui.theme import inject_css
 
 st.title("Settings")
 
 session = get_session()
 settings = providers.load_settings(session)
 
-st.subheader("Local LLM (Ollama)")
+section_header("DISPLAY", "Theme")
+
+mode = st.radio(
+    "Theme",
+    ["light", "dark"],
+    index=0 if settings.theme_mode == "light" else 1,
+    horizontal=True,
+    key="theme_mode_radio",
+)
+if mode != settings.theme_mode:
+    providers.save_settings(session, theme_mode=mode)
+    inject_css(mode)
+    st.success(f"Theme switched to {mode}.")
+
+st.divider()
+
+section_header("LOCAL LLM", "Local LLM (Ollama)")
 state = ollama_state()
 st.write(f"Status: **{state.value}** — {GUIDANCE[state]}")
 with st.form("local_settings"):

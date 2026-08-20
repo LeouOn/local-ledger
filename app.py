@@ -64,8 +64,10 @@ def _check_runtime_bind() -> str | None:
 def main() -> None:
     import streamlit as st
 
+    from local_ledger.llm.providers import load_settings
     from local_ledger.ui.chat_sidebar import render_chat_sidebar
-    from local_ledger.ui.chrome import render_ollama_banner
+    from local_ledger.ui.chrome import get_session, render_ollama_banner
+    from local_ledger.ui.theme import inject_css
 
     non_loopback = _check_runtime_bind()
     if non_loopback:
@@ -78,6 +80,9 @@ def main() -> None:
         st.stop()
 
     st.set_page_config(page_title="Local Ledger", page_icon="📒", layout="wide")
+
+    _settings = load_settings(get_session())
+    inject_css(_settings.theme_mode)
 
     page = st.navigation(
         [
