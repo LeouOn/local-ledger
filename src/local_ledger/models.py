@@ -188,6 +188,7 @@ class ProviderSettings(SQLModel, table=True):
         default=None, description="Name of env var holding the cloud key (never the key)"
     )
     evaluation_default_provider: str = Field(default="local")  # local | cloud-consent
+    theme_mode: str = Field(default="light", description="light | dark")
 
 
 class ImportPrefs(SQLModel, table=True):
