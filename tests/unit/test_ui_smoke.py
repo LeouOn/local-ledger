@@ -34,6 +34,7 @@ def temp_db_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 def _run_page(page_module: str) -> None:
+    """Render a page in AppTest, asserting no exception."""
     from streamlit.testing.v1 import AppTest
 
     repo_root = Path(__file__).resolve().parent.parent.parent
