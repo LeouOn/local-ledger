@@ -26,6 +26,7 @@ data/
 # Harness-internal session state (keep plans/drafts/research, ignore the rest)
 .omo/ralph-loop.local.md
 .omo/run-continuation/
+.superpowers/
 
 # OS / editor
 .DS_Store

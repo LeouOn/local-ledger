@@ -34,9 +34,12 @@ while IFS= read -r file; do
     esac
 done < <(git diff --cached --name-only --diff-filter=ACM)
 
-# Check staged content for secret patterns (skip .githooks/ which contains the patterns themselves)
-for pattern in "sk-[a-zA-Z0-9]{20}" "password.*=" "api_key.*=" "BEGIN.*PRIVATE KEY"; do
-    if git diff --cached -U0 -- . ':(exclude).githooks' | grep -qiE "$pattern"; then
+# Check staged content for secret patterns (skip .githooks/ which contains the
+# patterns themselves; skip deletions — removing old bad content is the fix,
+# not a new leak). Key patterns match assignments/quotes with real-looking
+# values, not field definitions like `api_key_env: str = Field(...)`.
+for pattern in "sk-[a-zA-Z0-9]{20}" "password['\\\"]?\s*[:=]\s*['\\\"][^'\\\"]{8,}" "api_key['\\\"]?\s*[:=]\s*['\\\"][^'\\\"]{8,}" "BEGIN.*PRIVATE KEY"; do
+    if git diff --cached -U0 --diff-filter=ACMR -- . ':(exclude).githooks' | grep -qiE "$pattern"; then
         echo "BLOCKED: staged content matches secret pattern: $pattern"
         BLOCKED=1
     fi
