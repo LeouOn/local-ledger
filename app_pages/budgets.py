@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 from sqlmodel import select
 
+from local_ledger.analysis.chat import build_chat_context
 from local_ledger.ledger.service import LedgerService
 from local_ledger.ledger.trends import TrendsService
 from local_ledger.models import Account, Category, CategoryBudget
@@ -40,6 +41,9 @@ st.divider()
 
 categories = list(session.exec(select(Category)).all())
 month = st.text_input("Month (YYYY-MM)", value="2026-01", key="bud_month")
+
+# Keep the persistent chat sidebar in sync with the month being edited here.
+st.session_state["chat_context"] = build_chat_context(session, month)
 
 section_header("ALLOCATIONS", f"Category allocations — {month}")
 existing = {

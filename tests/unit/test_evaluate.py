@@ -136,3 +136,198 @@ def test_outlier_detection_flags_3sigma_transaction(session: Session) -> None:
     result = deterministic_evaluate(summary, transactions=txns)
     outliers = [a for a in result.anomalies if a.kind == "outlier"]
     assert len(outliers) > 0
+
+
+def _cloud_ready(session: Session, monkeypatch: pytest.MonkeyPatch, model: str = "gpt-4o-mini"):
+    """Configure cloud settings + env key; return (settings, request builder)."""
+    from local_ledger.llm import providers
+
+    settings = providers.save_settings(
+        session,
+        cloud_base_url="https://api.openai.com/v1",
+        cloud_model=model,
+        cloud_api_key_env="LOCAL_LEDGER_TEST_KEY",
+    )
+    monkeypatch.setenv("LOCAL_LEDGER_TEST_KEY", "sk-test-key-value")
+    return settings
+
+
+def _seeded_payload(session: Session):  # type: ignore[no-untyped-def]
+    _seed(session)
+    summary = TrendsService(session).month_summary("2026-01")
+    return build_evaluation_payload(month="2026-01", summary=summary, mom_income=[], mom_spent=[])
+
+
+def test_llm_interpret_cloud_consents_sends_and_audits_one_request(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cloud path: the full request object (model, messages incl. system
+    prompt, response_format) is consent-verified, sent verbatim, and audited
+    per transmission attempt."""
+    import json as _json
+
+    from local_ledger.analysis.evaluate import build_interpret_request
+    from local_ledger.llm import cloud as cloud_module
+    from local_ledger.llm import providers
+    from local_ledger.llm.privacy import grant_consent
+    from local_ledger.models import AuditLog
+
+    payload = _seeded_payload(session)
+    settings = _cloud_ready(session, monkeypatch)
+    request = build_interpret_request(payload, model="gpt-4o-mini")
+    token = grant_consent(
+        provider=providers.cloud_destination(settings), payload_preview=request
+    )
+
+    sent: list[dict] = []
+
+    def fake_send(client, req):  # type: ignore[no-untyped-def]
+        sent.append(req)
+        return _json.dumps({"summary": "ok", "key_findings": [], "suggested_actions": []})
+
+    monkeypatch.setattr(cloud_module, "send_chat_request", fake_send)
+
+    result = llm_interpret(
+        payload,
+        provider="cloud",
+        consent_token=token,
+        settings=settings,
+        session=session,
+    )
+
+    assert result.summary == "ok"
+    assert sent == [request]  # exactly the consented body, nothing else
+    rows = list(session.exec(select(AuditLog)).all())
+    assert len(rows) == 1
+    assert rows[0].actor == "llm:cloud:https://api.openai.com/v1:gpt-4o-mini"
+    recorded = _json.loads(rows[0].after_json or "{}")
+    assert recorded["attempt"] == 1
+    assert recorded["outcome"] == "ok"
+    assert recorded["request"] == request
+
+
+def test_llm_interpret_cloud_rejects_unconsented_model_override(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model override must be consent-bound, not verified against the
+    configured model and then silently sent."""
+    from local_ledger.analysis.evaluate import build_interpret_request
+    from local_ledger.llm import providers
+    from local_ledger.llm.privacy import grant_consent
+    from local_ledger.models import AuditLog
+
+    payload = _seeded_payload(session)
+    settings = _cloud_ready(session, monkeypatch)
+    request = build_interpret_request(payload, model="gpt-4o-mini")
+    token = grant_consent(
+        provider=providers.cloud_destination(settings), payload_preview=request
+    )
+
+    with pytest.raises(providers.CloudCallBlocked):
+        llm_interpret(
+            payload,
+            model="unapproved-model",
+            provider="cloud",
+            consent_token=token,
+            settings=settings,
+            session=session,
+        )
+    # nothing was transmitted, so nothing was audited
+    assert list(session.exec(select(AuditLog)).all()) == []
+
+
+def test_llm_interpret_cloud_audits_every_retry_attempt(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invalid model output triggers retries; each transmission attempt
+    writes its own audit row."""
+    import json as _json
+
+    from local_ledger.analysis.evaluate import build_interpret_request
+    from local_ledger.llm import cloud as cloud_module
+    from local_ledger.llm import providers
+    from local_ledger.llm.privacy import grant_consent
+    from local_ledger.models import AuditLog
+
+    payload = _seeded_payload(session)
+    settings = _cloud_ready(session, monkeypatch)
+    request = build_interpret_request(payload, model="gpt-4o-mini")
+    token = grant_consent(
+        provider=providers.cloud_destination(settings), payload_preview=request
+    )
+
+    replies = iter(
+        [
+            "not json at all",
+            '{"summary": null, "bogus": 1}',  # valid JSON, wrong shape
+            _json.dumps({"summary": "ok", "key_findings": [], "suggested_actions": []}),
+        ]
+    )
+    monkeypatch.setattr(
+        cloud_module, "send_chat_request", lambda client, req: next(replies)
+    )
+
+    result = llm_interpret(
+        payload,
+        provider="cloud",
+        consent_token=token,
+        settings=settings,
+        session=session,
+        max_retries=2,
+    )
+    assert result.summary == "ok"
+
+    rows = list(session.exec(select(AuditLog)).all())
+    assert len(rows) == 3  # one row per transmission, retries included
+    outcomes = [_json.loads(r.after_json or "{}") for r in rows]
+    assert [o["attempt"] for o in outcomes] == [1, 2, 3]
+    assert all(o["outcome"] == "ok" for o in outcomes)  # transmissions succeeded
+
+
+def test_llm_interpret_cloud_audits_failed_transmission(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timeout/error after the request left the machine is audited."""
+    import json as _json
+
+    from local_ledger.analysis.evaluate import build_interpret_request
+    from local_ledger.llm import cloud as cloud_module
+    from local_ledger.llm import providers
+    from local_ledger.llm.privacy import grant_consent
+    from local_ledger.models import AuditLog
+
+    payload = _seeded_payload(session)
+    settings = _cloud_ready(session, monkeypatch)
+    request = build_interpret_request(payload, model="gpt-4o-mini")
+    token = grant_consent(
+        provider=providers.cloud_destination(settings), payload_preview=request
+    )
+
+    def boom(client, req):  # type: ignore[no-untyped-def]
+        raise TimeoutError("request timed out")
+
+    monkeypatch.setattr(cloud_module, "send_chat_request", boom)
+
+    with pytest.raises(TimeoutError):
+        llm_interpret(
+            payload,
+            provider="cloud",
+            consent_token=token,
+            settings=settings,
+            session=session,
+        )
+
+    rows = list(session.exec(select(AuditLog)).all())
+    assert len(rows) == 1
+    recorded = _json.loads(rows[0].after_json or "{}")
+    assert recorded["outcome"] == "error"
+    assert "timed out" in (recorded["error"] or "")
+
+
+def test_llm_interpret_requires_completer_for_local() -> None:
+    from local_ledger.analysis.payloads import build_evaluation_payload as _bep
+    from local_ledger.ledger.trends import MonthSummary
+
+    payload = _bep(month="2026-01", summary=MonthSummary(month="2026-01"), mom_income=[], mom_spent=[])
+    with pytest.raises(ValueError, match="completer"):
+        llm_interpret(payload, completer=None, provider="local")

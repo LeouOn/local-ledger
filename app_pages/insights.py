@@ -5,6 +5,7 @@ from __future__ import annotations
 import streamlit as st
 from sqlmodel import select
 
+from local_ledger.analysis.chat import build_chat_context
 from local_ledger.analysis.evaluate import deterministic_evaluate, llm_interpret
 from local_ledger.analysis.payloads import build_evaluation_payload
 from local_ledger.analysis.recommendations import RecommendationService
@@ -24,10 +25,7 @@ summary = trends.month_summary(month)
 
 # Inject context for the persistent chat sidebar so the LLM can reference
 # the current month's aggregates when answering questions.
-lines = [f"Month {month}: income ${summary.income_cents / 100:,.0f}, spent ${summary.spent_cents / 100:,.0f}, budgeted ${summary.budgeted_cents / 100:,.0f}."]
-for c in summary.per_category:
-    lines.append(f"  {c.name}: budgeted ${c.budgeted / 100:,.0f}, spent ${c.spent / 100:,.0f}, balance ${c.balance / 100:,.0f}.")
-st.session_state["chat_context"] = {"month": month, "summary_text": "\n".join(lines)}
+st.session_state["chat_context"] = build_chat_context(session, month)
 
 section_header("EVAL", "Deterministic findings")
 evaluation = deterministic_evaluate(summary)
@@ -41,13 +39,70 @@ st.divider()
 section_header("INTERPRET", "LLM interpretation")
 degraded = degraded_message("evaluate")
 provider = st.radio("Provider", ["local", "cloud (opt-in)"], horizontal=True, key="insights_provider")
-if st.button("Evaluate my budget"):
-    payload = build_evaluation_payload(month=month, summary=summary, mom_income=[], mom_spent=[])
-    if provider.startswith("cloud"):
-        st.info("Cloud interpretation requires a consent token issued from the Settings page.")
-    elif degraded:
-        st.warning(degraded)
-    else:
+interpret_payload = build_evaluation_payload(
+    month=month, summary=summary, mom_income=[], mom_spent=[]
+)
+
+
+def _render_evaluation(result, used_provider: str, used_model: str) -> None:
+    st.write(result.summary)
+    if result.key_findings:
+        st.markdown("**Key findings**")
+        for f in result.key_findings:
+            st.markdown(f"- {f}")
+    if result.suggested_actions:
+        st.markdown("**Suggested actions**")
+        for a in result.suggested_actions:
+            st.markdown(f"- {a}")
+    recs.save(
+        month=month,
+        provider=used_provider,
+        model=used_model,
+        prompt_hash=recs.hash_prompt(result.summary),
+        body=result.summary,
+    )
+    st.success("Saved recommendation.")
+
+
+if provider.startswith("cloud"):
+    # Consent ceremony lives at the call site: the user previews the EXACT
+    # outbound request (model, messages incl. the system prompt, response
+    # format), and the one-use token is granted for precisely it plus the
+    # configured endpoint and model — then spent immediately below. The same
+    # request object is what gets sent and what gets audited per attempt.
+    from local_ledger.analysis.evaluate import build_interpret_request
+    from local_ledger.llm import providers as llm_providers
+
+    cloud_settings = llm_providers.load_settings(session)
+    cloud_model = llm_providers.resolve_cloud_model(cloud_settings)
+    cloud_request = build_interpret_request(interpret_payload, model=cloud_model)
+    with st.expander("Cloud request preview (exactly what will be sent)", expanded=False):
+        st.json(cloud_request)
+    if st.button("Consent & run cloud evaluation", key="cloud_consent_run"):
+        if not cloud_settings.cloud_base_url or not cloud_settings.cloud_api_key_env:
+            st.error("Configure the cloud provider on the Settings page first.")
+        else:
+            from local_ledger.llm.privacy import grant_consent
+
+            token = grant_consent(
+                provider=llm_providers.cloud_destination(cloud_settings),
+                payload_preview=cloud_request,
+            )
+            try:
+                result = llm_interpret(
+                    interpret_payload,
+                    provider="cloud",
+                    consent_token=token,
+                    settings=cloud_settings,
+                    session=session,
+                )
+                _render_evaluation(result, "cloud", cloud_settings.cloud_model or "cloud")
+            except Exception as exc:
+                st.error(f"Interpretation failed: {exc}")
+elif degraded:
+    st.warning(degraded)
+else:
+    if st.button("Evaluate my budget"):
         try:
             from local_ledger.llm.providers import get_local_client, load_settings
             from local_ledger.llm.structured import make_openai_completer
@@ -55,24 +110,10 @@ if st.button("Evaluate my budget"):
             settings = load_settings(session)
             client = get_local_client(settings)
             completer = make_openai_completer(client)
-            result = llm_interpret(payload, completer=completer, model=settings.local_model)
-            st.write(result.summary)
-            if result.key_findings:
-                st.markdown("**Key findings**")
-                for f in result.key_findings:
-                    st.markdown(f"- {f}")
-            if result.suggested_actions:
-                st.markdown("**Suggested actions**")
-                for a in result.suggested_actions:
-                    st.markdown(f"- {a}")
-            recs.save(
-                month=month,
-                provider="ollama",
-                model=settings.local_model,
-                prompt_hash=recs.hash_prompt(result.summary),
-                body=result.summary,
+            result = llm_interpret(
+                interpret_payload, completer=completer, model=settings.local_model
             )
-            st.success("Saved recommendation.")
+            _render_evaluation(result, "ollama", settings.local_model)
         except Exception as exc:
             st.error(f"Interpretation failed: {exc}")
 

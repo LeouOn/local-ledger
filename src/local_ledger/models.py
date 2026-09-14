@@ -182,6 +182,12 @@ class ProviderSettings(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     local_base_url: str = "http://localhost:11434/v1"
     local_model: str = "llama3.3:8b"
+    local_profile: str = Field(
+        default="ollama", description="Selected local server profile: ollama | ds4 | glm"
+    )
+    local_autostart: bool = Field(
+        default=False, description="Start the selected local server when none is healthy"
+    )
     cloud_base_url: str | None = None
     cloud_model: str | None = None
     cloud_api_key_env: str | None = Field(

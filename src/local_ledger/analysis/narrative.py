@@ -24,29 +24,65 @@ _SYSTEM_PROMPT = (
 )
 
 
+def narrative_messages(payload: MultiMonthPayload) -> list[dict]:
+    return [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": to_prompt(payload)},
+    ]
+
+
+def build_narrative_request(payload: MultiMonthPayload, *, model: str) -> dict:
+    """The exact cloud request body a narrative call will transmit."""
+    from local_ledger.llm.cloud import build_chat_request
+
+    return build_chat_request(model=model, messages=narrative_messages(payload))
+
+
 def generate_trend_narrative(
     payload: MultiMonthPayload,
     *,
-    completer,
-    model: str,
+    completer=None,
+    model: str = "",
     provider: str = "local",
     consent_token: str | None = None,
     settings=None,
+    session=None,
     max_retries: int = 2,
 ) -> TrendNarrative:
     if provider == "cloud":
         from local_ledger.llm import providers
+        from local_ledger.llm.cloud import make_cloud_completer
+        from local_ledger.llm.privacy import egress_attempt_auditor
 
         if consent_token is None or settings is None:
             raise providers.CloudCallBlocked(
                 "cloud narrative requires explicit per-call consent and configured settings"
             )
-        providers.get_cloud_client(consent_token=consent_token, settings=settings)
-
-    messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": to_prompt(payload)},
-    ]
+        if session is None:
+            raise providers.CloudCallBlocked(
+                "cloud narrative requires a session for egress auditing"
+            )
+        # Resolve the model that will ACTUALLY be sent before verifying
+        # consent, so the token is bound to it; an unconsented override is
+        # rejected here rather than transmitted.
+        model = providers.resolve_cloud_model(settings, model)
+        request = build_narrative_request(payload, model=model)
+        client = providers.get_cloud_client(
+            consent_token=consent_token,
+            settings=settings,
+            payload=request,
+            model=model,
+        )
+        audit = egress_attempt_auditor(
+            session,
+            provider=settings.cloud_base_url or "cloud",
+            model=model,
+            request=request,
+        )
+        completer = make_cloud_completer(client, request, audit=audit)
+    if completer is None:
+        raise ValueError("generate_trend_narrative requires a completer (or a cloud consent token)")
+    messages = narrative_messages(payload)
     try:
         return extract(completer, TrendNarrative, messages, model, max_retries=max_retries)
     except StructuredOutputError as exc:

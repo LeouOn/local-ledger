@@ -41,9 +41,53 @@ def test_get_local_client_returns_openai_when_ready(settings: ProviderSettings) 
     assert str(client.base_url).rstrip("/").endswith("v1")
 
 
+def test_local_client_refuses_non_loopback_url(session: Session) -> None:
+    """The consent-free local path must never point off-machine."""
+    s = providers.save_settings(session, local_base_url="http://192.168.1.5:11434/v1")
+    with pytest.raises(providers.NonLocalEndpointError):
+        providers.get_local_client(s, state_detector=_detector(OllamaState.READY))
+    with pytest.raises(providers.NonLocalEndpointError):
+        providers.require_local_ready(s, state_detector=_detector(OllamaState.READY))
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://localhost:11434/v1", "http://127.0.0.1:8000/v1", "http://[::1]:9000/v1", "http://[::ffff:127.0.0.1]:1/v1"],
+)
+def test_local_endpoint_accepts_loopback_variants(base_url: str) -> None:
+    providers.assert_local_endpoint(base_url)  # must not raise
+
+
+@pytest.mark.parametrize("base_url", ["http://example.com:11434/v1", "http://0.0.0.0:8000/v1", "not a url", ""])
+def test_local_endpoint_refuses_non_loopback(base_url: str) -> None:
+    with pytest.raises(providers.NonLocalEndpointError):
+        providers.assert_local_endpoint(base_url)
+
+
+def test_all_local_profiles_use_loopback_endpoints() -> None:
+    from local_ledger.llm.local_server import PROFILES
+
+    for profile in PROFILES.values():
+        providers.assert_local_endpoint(profile.base_url)
+
+
+def test_cloud_destination_includes_endpoint_and_model(session: Session) -> None:
+    providers.save_settings(
+        session, cloud_base_url="https://api.openai.com/v1", cloud_model="gpt-4o-mini"
+    )
+    a = providers.cloud_destination(providers.load_settings(session))
+    providers.save_settings(session, cloud_model="gpt-4o")
+    b = providers.cloud_destination(providers.load_settings(session))
+    providers.save_settings(session, cloud_base_url="https://api.anthropic.com/v1")
+    c = providers.cloud_destination(providers.load_settings(session))
+    assert len({a, b, c}) == 3
+
+
 def test_get_cloud_client_blocked_by_default(settings: ProviderSettings) -> None:
     with pytest.raises(providers.CloudCallBlocked):
-        providers.get_cloud_client(consent_token=None, settings=settings)
+        providers.get_cloud_client(
+            consent_token=None, settings=settings, payload={"month": "2026-01"}
+        )
 
 
 def test_list_local_models_injectable(settings: ProviderSettings) -> None:
@@ -57,6 +101,8 @@ def test_load_settings_returns_singleton_defaults(session: Session) -> None:
     assert s1.id == s2.id == 1
     assert s1.local_base_url == "http://localhost:11434/v1"
     assert s1.evaluation_default_provider == "local"
+    assert s1.local_profile == "ollama"
+    assert s1.local_autostart is False
 
 
 def test_save_settings_updates_fields(session: Session) -> None:

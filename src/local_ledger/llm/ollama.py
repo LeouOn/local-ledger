@@ -1,15 +1,16 @@
-"""Ollama degradation contract.
+"""Local LLM degradation contract (provider-neutral probing).
 
-Probes the local Ollama runtime and reports one of four states so every LLM
-feature can degrade to a deterministic message instead of raising a raw
-``ConnectionError``. Probes are injectable so the unit suite (which blocks
-sockets) can exercise every state without a real Ollama.
+Probes the configured local endpoint and reports one of four states so every
+LLM feature can degrade to a deterministic message instead of raising a raw
+``ConnectionError``. The endpoint is probed FIRST: a healthy, compatible
+server is reusable even when no launcher binary is installed. Probes are
+injectable so the unit suite (which blocks sockets) can exercise every state
+without a real server.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 import urllib.request
 from collections.abc import Callable
 from enum import StrEnum
@@ -25,6 +26,11 @@ class OllamaState(StrEnum):
     READY = "READY"
 
 
+# --- provider-appropriate guidance -----------------------------------------
+#
+# Status messages are keyed by the selected local profile ("ollama", "ds4",
+# "glm") so users of DwarfStar servers are not told to install Ollama.
+
 GUIDANCE: dict[OllamaState, str] = {
     OllamaState.NOT_INSTALLED: "Install Ollama from https://ollama.com and restart the app.",
     OllamaState.NOT_RUNNING: "Start the local model server: run `ollama serve`.",
@@ -32,22 +38,60 @@ GUIDANCE: dict[OllamaState, str] = {
     OllamaState.READY: "Local model is ready.",
 }
 
+_PROFILE_GUIDANCE: dict[str, dict[OllamaState, str]] = {
+    "ollama": GUIDANCE,
+    "ds4": {
+        OllamaState.NOT_INSTALLED: (
+            "DwarfStar server not found — build it in ~/Projects/ds4 (make)."
+        ),
+        OllamaState.NOT_RUNNING: (
+            "Start the DwarfStar server (~/Projects/ds4/ds4-server) or enable "
+            "'Start local server when needed' in Settings."
+        ),
+        OllamaState.MODEL_MISSING: (
+            "The DwarfStar endpoint is serving a different model than the selected "
+            "profile; stop that server manually before starting this one."
+        ),
+        OllamaState.READY: "Local model is ready.",
+    },
+    "glm": {
+        OllamaState.NOT_INSTALLED: (
+            "DwarfStar server not found — build it in ~/Projects/ds4 (make)."
+        ),
+        OllamaState.NOT_RUNNING: (
+            "Start the GLM server (ds4-server -m gguf/GLM-5.3-Flash-…-MTP-ds4.gguf) "
+            "or enable 'Start local server when needed' in Settings."
+        ),
+        OllamaState.MODEL_MISSING: (
+            "The DwarfStar endpoint is serving a different model than the selected "
+            "profile; stop that server manually before starting this one."
+        ),
+        OllamaState.READY: "Local model is ready.",
+    },
+}
+
+
+def guidance_for(state: OllamaState, profile_key: str = "ollama") -> str:
+    """Status guidance appropriate for the selected local server profile."""
+    return _PROFILE_GUIDANCE.get(profile_key, GUIDANCE)[state]
+
+
 # Per-feature degraded UX messages, keyed by state then feature.
 DEGRADED_BEHAVIOR: dict[OllamaState, dict[str, str]] = {
     OllamaState.NOT_INSTALLED: {
-        "paste_parse": "Paste-parse is unavailable: install Ollama to enable local parsing.",
-        "categorize": "Auto-categorization is unavailable: install Ollama to enable it.",
-        "evaluate": "LLM budget evaluation is unavailable: install Ollama or connect a cloud provider in Settings.",
+        "paste_parse": "Paste-parse is unavailable: no local model server is installed.",
+        "categorize": "Auto-categorization is unavailable: no local model server is installed.",
+        "evaluate": "LLM budget evaluation is unavailable: install a local model server or connect a cloud provider in Settings.",
     },
     OllamaState.NOT_RUNNING: {
-        "paste_parse": "Paste-parse is unavailable: start Ollama (`ollama serve`).",
-        "categorize": "Auto-categorization is unavailable: start Ollama.",
-        "evaluate": "LLM budget evaluation is unavailable: start Ollama or use a cloud provider.",
+        "paste_parse": "Paste-parse is unavailable: start the local model server.",
+        "categorize": "Auto-categorization is unavailable: start the local model server.",
+        "evaluate": "LLM budget evaluation is unavailable: start the local model server or use a cloud provider.",
     },
     OllamaState.MODEL_MISSING: {
-        "paste_parse": "Paste-parse is unavailable: pull the configured model in Settings.",
-        "categorize": "Auto-categorization is unavailable: pull the configured model.",
-        "evaluate": "LLM budget evaluation is unavailable: pull the configured model.",
+        "paste_parse": "Paste-parse is unavailable: the configured model is not loaded.",
+        "categorize": "Auto-categorization is unavailable: the configured model is not loaded.",
+        "evaluate": "LLM budget evaluation is unavailable: the configured model is not loaded.",
     },
     OllamaState.READY: {
         "paste_parse": "Ready.",
@@ -69,24 +113,58 @@ class LLMUnavailable(Exception):
 
 
 def _default_probe_binary() -> bool:
-    return shutil.which("ollama") is not None
+    # Any known local profile launcher counts; the profile itself is what
+    # decides what would actually be started.
+    from local_ledger.llm.local_server import PROFILES, resolve_launcher
+
+    return any(resolve_launcher(p) is not None for p in PROFILES.values())
 
 
 def _default_probe_endpoint(base_url: str, timeout: float) -> bool:
+    clean = base_url.rstrip("/")
+    # 1. Try Ollama (/api/tags)
     try:
-        urllib.request.urlopen(f"{base_url}/api/tags", timeout=timeout).close()
-    except OSError:
-        return False
-    return True
+        urllib.request.urlopen(f"{clean}/api/tags", timeout=timeout).close()
+        return True
+    except (OSError, RuntimeError):
+        pass
+    # 2. Try OpenAI-compatible endpoints (/v1/models, /models)
+    for path in ("/v1/models", "/models"):
+        try:
+            req = urllib.request.Request(f"{clean}{path}", headers={"User-Agent": "local-ledger"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status in (200, 204):
+                    return True
+        except (OSError, RuntimeError):
+            pass
+    return False
 
 
-def _default_list_models(base_url: str, timeout: float) -> list[str]:
+def _default_list_models(base_url: str, timeout: float) -> list[str] | None:
+    """List served model IDs, or None when model discovery is unsupported.
+
+    An empty list means the endpoint answered and serves NO models — the
+    configured model is then definitely missing. ``None`` means no listing
+    endpoint answered usable JSON, so the served model cannot be verified.
+    """
+    clean = base_url.rstrip("/")
+    # 1. Ollama native /api/tags
     try:
-        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=timeout) as resp:
+        with urllib.request.urlopen(f"{clean}/api/tags", timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
-    except OSError:
-        return []
-    return [m.get("name", "") for m in payload.get("models", [])]
+        return [m.get("name", "") for m in payload.get("models", [])]
+    except (OSError, RuntimeError, ValueError, AttributeError, TypeError):
+        pass
+    # 2. OpenAI-compatible listing (/v1/models, /models)
+    for path in ("/v1/models", "/models"):
+        try:
+            req = urllib.request.Request(f"{clean}{path}", headers={"User-Agent": "local-ledger"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            return [m.get("id", "") for m in payload.get("data", [])]
+        except (OSError, RuntimeError, ValueError, AttributeError, TypeError):
+            continue
+    return None
 
 
 def detect_state(
@@ -96,12 +174,21 @@ def detect_state(
     *,
     probe_binary: Callable[[], bool] = _default_probe_binary,
     probe_endpoint: Callable[[str, float], bool] = _default_probe_endpoint,
-    list_models: Callable[[str, float], list[str]] = _default_list_models,
+    list_models: Callable[[str, float], list[str] | None] = _default_list_models,
 ) -> OllamaState:
+    # Endpoint first: a healthy, compatible server is adopted as-is, even when
+    # no launcher binary is installed on this machine.
+    if probe_endpoint(base_url, timeout):
+        models = list_models(base_url, timeout)
+        if models is None:
+            # Model discovery is unsupported here; endpoint health is the best
+            # available signal, so the server is considered usable.
+            return OllamaState.READY
+        if model not in models:
+            # Covers both a mismatched server and an empty model library:
+            # the configured model is definitely not being served.
+            return OllamaState.MODEL_MISSING
+        return OllamaState.READY
     if not probe_binary():
         return OllamaState.NOT_INSTALLED
-    if not probe_endpoint(base_url, timeout):
-        return OllamaState.NOT_RUNNING
-    if model not in list_models(base_url, timeout):
-        return OllamaState.MODEL_MISSING
-    return OllamaState.READY
+    return OllamaState.NOT_RUNNING

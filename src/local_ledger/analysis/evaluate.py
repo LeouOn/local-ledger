@@ -115,35 +115,72 @@ def deterministic_evaluate(
     return result
 
 
+_INTERPRET_SYSTEM_PROMPT = (
+    "You are a budget analyst. Given only category-level aggregates (no raw "
+    'transactions), return JSON {"summary": str, "key_findings": [str], '
+    '"suggested_actions": [str]}. Do not invent numbers; use the provided cents.'
+)
+
+
+def interpret_messages(payload: EvaluationPayload) -> list[dict]:
+    return [
+        {"role": "system", "content": _INTERPRET_SYSTEM_PROMPT},
+        {"role": "user", "content": to_prompt(payload)},
+    ]
+
+
+def build_interpret_request(payload: EvaluationPayload, *, model: str) -> dict:
+    """The exact cloud request body an interpretation will transmit."""
+    from local_ledger.llm.cloud import build_chat_request
+
+    return build_chat_request(model=model, messages=interpret_messages(payload))
+
+
 def llm_interpret(
     payload: EvaluationPayload,
     *,
-    completer,
-    model: str,
+    completer=None,
+    model: str = "",
     provider: str = "local",
     consent_token: str | None = None,
     settings=None,
+    session=None,
     max_retries: int = 2,
 ) -> BudgetEvaluation:
     if provider == "cloud":
         from local_ledger.llm import providers
+        from local_ledger.llm.cloud import make_cloud_completer
+        from local_ledger.llm.privacy import egress_attempt_auditor
 
         if consent_token is None or settings is None:
             raise providers.CloudCallBlocked(
                 "cloud interpretation requires explicit per-call consent and configured settings"
             )
-        providers.get_cloud_client(consent_token=consent_token, settings=settings)
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a budget analyst. Given only category-level aggregates (no raw "
-                'transactions), return JSON {"summary": str, "key_findings": [str], '
-                '"suggested_actions": [str]}. Do not invent numbers; use the provided cents.'
-            ),
-        },
-        {"role": "user", "content": to_prompt(payload)},
-    ]
+        if session is None:
+            raise providers.CloudCallBlocked(
+                "cloud interpretation requires a session for egress auditing"
+            )
+        # Resolve the model that will ACTUALLY be sent before verifying
+        # consent, so the token is bound to it; an unconsented override is
+        # rejected here rather than transmitted.
+        model = providers.resolve_cloud_model(settings, model)
+        request = build_interpret_request(payload, model=model)
+        client = providers.get_cloud_client(
+            consent_token=consent_token,
+            settings=settings,
+            payload=request,
+            model=model,
+        )
+        audit = egress_attempt_auditor(
+            session,
+            provider=settings.cloud_base_url or "cloud",
+            model=model,
+            request=request,
+        )
+        completer = make_cloud_completer(client, request, audit=audit)
+    if completer is None:
+        raise ValueError("llm_interpret requires a completer (or a cloud consent token)")
+    messages = interpret_messages(payload)
     try:
         return extract(completer, BudgetEvaluation, messages, model, max_retries=max_retries)
     except StructuredOutputError as exc:

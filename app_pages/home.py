@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from local_ledger.analysis.chat import build_chat_context
 from local_ledger.analysis.evaluate import deterministic_evaluate
 from local_ledger.ledger.trends import TrendsService
 from local_ledger.ui.chrome import get_session
@@ -17,6 +18,10 @@ trends = TrendsService(session)
 
 month = st.text_input("Month (YYYY-MM)", value="2026-01", key="home_month")
 summary = trends.month_summary(month)
+
+# Refresh the persistent chat sidebar context so budget questions on this
+# page reference the currently selected month's aggregates.
+st.session_state["chat_context"] = build_chat_context(session, month)
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
