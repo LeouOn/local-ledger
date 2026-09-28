@@ -44,6 +44,9 @@ class ParsedTransaction:
     payee_raw: str | None = None
     notes: str | None = None
     imported_id: str | None = None
+    # 1-based record number in the source file (the header is record 1), so a
+    # committed transaction can be traced back to a line the user can open.
+    source_row: int | None = None
 
 
 @dataclass
@@ -154,7 +157,7 @@ def parse_csv(text: str, *, mapping: ColumnMapping) -> ParseResult:
     transactions: list[ParsedTransaction] = []
     errors: list[ParseError] = []
 
-    for line_no, row in enumerate(reader, start=2):  # header is line 1
+    for line_no, row in enumerate(reader, start=2):  # header is record 1
         try:
             amount = _resolve_amount(row, mapping)
             date = parse_date(row.get(mapping.date_col, ""), mapping.date_format)
@@ -165,6 +168,7 @@ def parse_csv(text: str, *, mapping: ColumnMapping) -> ParseResult:
                     payee_raw=(row.get(mapping.payee_col) if mapping.payee_col else None),
                     notes=(row.get(mapping.notes_col) if mapping.notes_col else None),
                     imported_id=(row.get(mapping.imported_id_col) if mapping.imported_id_col else None),
+                    source_row=line_no,
                 )
             )
         except (AmbiguousAmountError, ValueError) as exc:

@@ -1,0 +1,53 @@
+{
+  "document_id": "synth-doc-rental-prop-a",
+  "document_type": "RENTAL_ANNUAL_STATEMENT",
+  "tax_year": 2025,
+  "property": {
+    "id": "prop-001",
+    "street_address": "123 Citrus Lane",
+    "city": "Pasadena",
+    "state": "CA",
+    "zip_code": "91101",
+    "property_type": "Single Family Residential",
+    "ownership_basis_points": 10000,
+    "days_rented": 365,
+    "days_personal": 0,
+    "date_placed_in_service": "2021-08-01"
+  },
+  "gross_rents_received_cents": 3600000,
+  "operating_expenses": {
+    "advertising_cents": 0,
+    "cleaning_and_maintenance_cents": 65000,
+    "commissions_cents": 0,
+    "insurance_cents": 185000,
+    "legal_and_professional_cents": 45000,
+    "management_fees_cents": 288000,
+    "mortgage_interest_1098_box1_cents": 1245000,
+    "repairs_cents": 142000,
+    "supplies_cents": 18000,
+    "property_taxes_cents": 560000,
+    "utilities_cents": 0,
+    "hoa_dues_cents": 240000
+  },
+  "mortgage_statement_1098_reconciliation": {
+    "payer": "First West Mortgage Co",
+    "box1_mortgage_interest_cents": 1245000,
+    "box2_outstanding_principal_cents": 28400000,
+    "principal_paid_current_year_cents": 820000,
+    "principal_note": "Principal payments build equity and are not deductible rental expenses on Schedule E line 12",
+    "escrow_tax_paid_by_lender_cents": 560000,
+    "escrow_insurance_paid_by_lender_cents": 185000,
+    "escrow_note": "Verify lender disbursements match county property tax bill and insurance invoices to prevent double counting"
+  },
+  "capital_improvement_suspects": [
+    {
+      "id": "exp-suspect-01",
+      "date": "2025-07-14",
+      "description": "HVAC System Full Replacement",
+      "amount_cents": 780000,
+      "categorized_as": "repairs",
+      "flag": "CAPITAL_IMPROVEMENT_SUSPECT",
+      "authority": "Treas. Reg. § 1.263(a)-3(j) (Betterment/Restoration). System replacement extends asset life; must be capitalized and depreciated over 27.5 years rather than expensed as repairs."
+    }
+  ]
+}

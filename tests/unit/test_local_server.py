@@ -5,8 +5,11 @@ All probes/spawns are injected fakes; no sockets and no real processes.
 
 from __future__ import annotations
 
+import os
+import shutil
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -78,7 +81,18 @@ def make_manager(
     log_dir: Path,
     timeout: float = 10.0,
     clock=None,
+    which: Callable[[str], str | None] | None = None,
 ) -> LocalServerManager:
+    if which is None:
+        def fake_which(cmd: str) -> str | None:
+            if "nonexistent" in cmd or "ghost" in cmd:
+                return None
+            if "run-ds4f.sh" in cmd or "run-glm.sh" in cmd or "ollama" in cmd:
+                return os.path.expanduser(cmd)
+            return shutil.which(cmd)
+
+        which = fake_which
+
     return LocalServerManager(
         detect=detect,
         spawn=spawn,
@@ -87,6 +101,7 @@ def make_manager(
         log_dir=log_dir,
         poll_interval=0,
         startup_timeout=timeout,
+        which=which,
     )
 
 
@@ -161,8 +176,12 @@ def test_launch_uses_argument_list_without_shell(tmp_path: Path) -> None:
     argv, kwargs = spawn.calls[0]
     assert isinstance(argv, list)
     assert argv[0].endswith("run-ds4f.sh")
-    assert argv[1:] == ["server"]
+    assert argv[1] == "server"
+    assert "--ssd-streaming" in argv  # resident load OOMs on this machine
     assert "shell" not in kwargs or kwargs.get("shell") is False
+    # CTX override reaches the launcher through the environment.
+    assert kwargs["env"]["CTX"] == "16384"
+    assert kwargs["env"]["PATH"] == os.environ["PATH"]
 
 
 # --- slow loading / readiness ---
@@ -252,13 +271,24 @@ def test_endpoint_serving_different_model_is_never_replaced(tmp_path: Path) -> N
 def test_profiles_cover_ollama_ds4_glm() -> None:
     assert set(PROFILES) == {"ollama", "ds4", "glm"}
     assert PROFILES["ds4"].model == "deepseek-v4-flash"
-    assert PROFILES["glm"].model == "glm-5.3-flash"
+    # The GLM engine is LISTED as glm-5.2 by the server; health checks must
+    # use the listed id even though request aliases exist.
+    assert PROFILES["glm"].model == "glm-5.2"
     # Both DwarfStar profiles share one port, so only one can run at a time.
     assert PROFILES["ds4"].base_url == PROFILES["glm"].base_url
     # Launch goes through the project's wrapper scripts, which carry the
     # streaming / expert-cache / MTP / memory-guard settings.
-    assert PROFILES["ds4"].launch == ("~/Projects/ds4/run-ds4f.sh", "server")
-    assert PROFILES["glm"].launch == ("~/Projects/ds4/run-glm.sh", "server")
+    assert PROFILES["ds4"].launch[0].endswith("run-ds4f.sh")
+    assert PROFILES["ds4"].launch[1] == "server"
+    assert PROFILES["ds4"].launch_env == (("CTX", "16384"),)
+    assert PROFILES["glm"].launch == (
+        "~/Projects/ds4/run-glm.sh",
+        "server",
+        "--kv-disk-dir",
+        "/tmp/ds4-kv-glm",
+        "--kv-disk-space-mb",
+        "8192",
+    )
 
 
 def test_profile_from_settings_falls_back_to_ollama() -> None:
@@ -372,3 +402,53 @@ def test_timeout_does_not_permit_duplicate_launch_while_process_lives(tmp_path: 
     proc.exit_after = 0  # next poll() reports the process dead
     mgr.ensure_running(DS4)
     assert len(spawn.calls) == 2
+
+
+# --- launcher discovery and configurability ---
+
+
+def test_resolve_launcher_honors_custom_ds4_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    custom_dir = tmp_path / "custom_ds4"
+    custom_dir.mkdir()
+    script = custom_dir / "run-ds4f.sh"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+
+    monkeypatch.setenv("LOCAL_LEDGER_DS4_HOME", str(custom_dir))
+
+    from local_ledger.llm.local_server import resolve_launcher
+
+    found = resolve_launcher(DS4)
+    assert found is not None
+    assert Path(found).resolve() == script.resolve()
+
+
+def test_resolve_launcher_discovers_on_path() -> None:
+    from local_ledger.llm.local_server import resolve_launcher
+
+    def fake_which(cmd: str) -> str | None:
+        if cmd == "run-ds4f.sh":
+            return "/usr/local/bin/run-ds4f.sh"
+        return None
+
+    found = resolve_launcher(DS4, which=fake_which)
+    assert found == "/usr/local/bin/run-ds4f.sh"
+
+
+def test_manager_respects_injected_which(tmp_path: Path) -> None:
+    detect = FakeDetect(OllamaState.NOT_RUNNING)
+    spawn = FakeSpawn(FakeProc())
+    custom_calls: list[str] = []
+
+    def tracking_which(cmd: str) -> str | None:
+        custom_calls.append(cmd)
+        if "run-ds4f.sh" in cmd:
+            return "/injected/bin/run-ds4f.sh"
+        return None
+
+    mgr = make_manager(detect, spawn, log_dir=tmp_path, which=tracking_which)
+    mgr.ensure_running(DS4)
+    assert len(spawn.calls) == 1
+    assert spawn.calls[0][0][0] == "/injected/bin/run-ds4f.sh"
+    assert len(custom_calls) > 0
+

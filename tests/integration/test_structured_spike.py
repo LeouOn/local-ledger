@@ -40,13 +40,12 @@ def _require_ollama() -> None:
         pytest.skip(f"ollama state {state.value}; spike deferred", allow_module_level=True)
 
 
-def test_structured_output_spike_records_verdict() -> None:
+def test_structured_output_spike_records_verdict(tmp_path: Path) -> None:
     from pydantic import BaseModel
     from sqlalchemy import create_engine
-    from sqlmodel import Session
+    from sqlmodel import Session, SQLModel
 
-    from local_ledger.db import DEFAULT_DB_URL, run_migrations
-    from local_ledger.llm.providers import load_settings
+    from local_ledger.llm.providers import get_local_client, load_settings
     from local_ledger.llm.structured import extract, make_openai_completer
 
     class Item(BaseModel):
@@ -54,14 +53,14 @@ def test_structured_output_spike_records_verdict() -> None:
         merchant: str
         amount_cents: int
 
-    run_migrations(DEFAULT_DB_URL)
-    engine = create_engine(DEFAULT_DB_URL)
+    db_path = tmp_path / "structured_spike.db"
+    db_url = f"sqlite:///{db_path.as_posix()}"
+    engine = create_engine(db_url)
+    SQLModel.metadata.create_all(engine)
     try:
         with Session(engine) as session:
             settings = load_settings(session)
-            client = __import__("local_ledger.llm.providers", fromlist=["get_local_client"]).get_local_client(
-                settings
-            )
+            client = get_local_client(settings)
     finally:
         engine.dispose()
 

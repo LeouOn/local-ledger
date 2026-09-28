@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 
 from pydantic import ConfigDict, field_validator
-from sqlalchemy import CheckConstraint
+from sqlalchemy import CheckConstraint, Index, text
 from sqlmodel import Field, SQLModel
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -102,7 +102,16 @@ class Transaction(SQLModel, table=True):
     # validate_assignment also makes __init__ run the field validators, which is
     # what enforces strict integer-cents and ISO-date invariants.
     model_config = ConfigDict(validate_assignment=True)
-    __table_args__ = (CheckConstraint("amount_cents <> 0", name="ck_transaction_amount_nonzero"),)
+    __table_args__ = (
+        CheckConstraint("amount_cents <> 0", name="ck_transaction_amount_nonzero"),
+        Index(
+            "uq_transaction_account_imported_id",
+            "account_id",
+            "imported_id",
+            unique=True,
+            sqlite_where=text("imported_id IS NOT NULL"),
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     account_id: int = Field(foreign_key="account.id")
@@ -203,7 +212,12 @@ class ImportPrefs(SQLModel, table=True):
 
 
 class StagedTransaction(SQLModel, table=True):
-    """Rows produced by ingest, awaiting dedup classification and user confirm."""
+    """Rows produced by ingest, awaiting dedup classification and user confirm.
+
+    Provenance columns: ``import_batch`` + ``source_row`` locate the row in the
+    originating file, and ``committed_transaction_id`` records the transaction
+    this row produced so a repeated commit is a no-op instead of a duplicate.
+    """
 
     model_config = ConfigDict(validate_assignment=True)
     id: int | None = Field(default=None, primary_key=True)
@@ -212,11 +226,18 @@ class StagedTransaction(SQLModel, table=True):
     date: str
     amount_cents: int
     payee_raw: str | None = None
+    notes: str | None = None
+    source_row: int | None = Field(default=None, description="1-based line in the source file")
     suggested_category_id: int | None = Field(default=None, foreign_key="category.id")
     confidence: float | None = None
     dedup_status: DedupStatus = Field(default=DedupStatus.NEW)
     review_state: ReviewState = Field(default=ReviewState.PENDING)
     imported_id: str | None = None
+    committed_transaction_id: int | None = Field(
+        default=None, foreign_key="transaction.id", description="Set once this row is committed"
+    )
+    committed_at: datetime | None = Field(default=None)
+    committed_by: str | None = Field(default=None, description="actor of the commit")
 
     @field_validator("amount_cents", mode="before")
     @classmethod
@@ -304,3 +325,28 @@ class Rule(SQLModel, table=True):
         if v < 0:
             raise ValueError("amounts must be non-negative")
         return v
+
+
+# Re-export Tax domain models (TAX-04) so they register on SQLModel.metadata
+from local_ledger.tax.models import (  # noqa: E402,F401
+    AssetDepreciation,
+    DocumentType,
+    EvidencePacket,
+    EvidenceStatus,
+    ExtractedField,
+    FilingStatus,
+    HoldingTerm,
+    InvestmentSaleRecord,
+    Jurisdiction,
+    JurisdictionCarryover,
+    ReconciliationItem,
+    ReconciliationStatus,
+    RentalExpenseRecord,
+    ResidencyStatus,
+    ScanState,
+    TaxDocument,
+    TaxProperty,
+    TaxQuestion,
+    TaxWorkspace,
+    WorkspaceStatus,
+)

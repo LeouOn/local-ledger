@@ -9,6 +9,9 @@ while remembering its own suggestions so you can see whether they helped.
 
 - **Import** bank/credit-card CSVs with auto-suggested column mapping, or paste a
   statement and let the local LLM parse it into transactions you confirm.
+  Imported rows are staged first: the Import page lists the batch, you accept or
+  reject the rows you want, and only accepted rows are written. Committing twice
+  writes once, and a rejected row is never written.
 - **Budget** per category with optional month-to-month carryover (supports both
   envelope and category-budgeting styles).
 - **Evaluate** your budget: deterministic anomaly detection (overspend, MoM
@@ -50,11 +53,10 @@ while remembering its own suggestions so you can see whether they helped.
 
 ```bash
 # 1. create an isolated environment with Python 3.12
-uv venv --python 3.12 .venv            # or: py -3.12 -m venv .venv
+uv venv --python 3.12 .venv            # or: python3.12 -m venv .venv
 
 # 2. install the app + dev tooling
-uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
-# or with pip:  .venv\Scripts\activate && pip install -e ".[dev]"
+uv pip install -e ".[dev]"             # or: source .venv/bin/activate && pip install -e ".[dev]"
 
 # 3. run the app (bound to 127.0.0.1, schema auto-migrates on first launch)
 streamlit run app.py
@@ -74,27 +76,51 @@ Then open the printed `http://localhost:8501` URL.
 4. **Insights page** → click **Evaluate my budget** for deterministic findings
    plus an optional LLM interpretation.
 
-## Optional: enable the local LLM
+## Optional: enable local LLM profiles
+
+Local Ledger supports multiple local model profiles selectable in **Settings**:
+
+### 1. Ollama (default)
 
 ```bash
 ollama serve                       # start the local model server
-ollama pull llama3.3:8b            # pull a model (8B fits in 16 GB RAM)
+ollama pull llama3.1:8b            # pull an 8B model (fits in 16 GB RAM; note llama3.3 is 70B only)
 ```
 
-For an 8 GB RAM machine, `ollama pull phi4` is a smaller alternative. Set the
-model in **Settings**.
+For smaller machines (8 GB RAM), `ollama pull phi4` or `ollama pull qwen2.5:7b` are supported.
+Select the model in **Settings**.
 
-## Ollama degradation contract
+### 2. DwarfStar (DeepSeek V4 Flash & GLM 5.3 Flash)
 
-The app probes Ollama at startup and on every page; each LLM feature shows a
+For local ROCm / Vulkan inference engines:
+- **Profile `ds4`**: DeepSeek V4 Flash (`deepseek-v4-flash`), launched via `run-ds4f.sh server`.
+- **Profile `glm`**: GLM 5.3 Flash (listed as `glm-5.2` by the engine), launched via `run-glm.sh server`.
+- **Launcher directory**: Configured via `LOCAL_LEDGER_DS4_HOME` (or `DS4_HOME`, defaulting to `~/Projects/ds4` or PATH discovery).
+- Single-flight autostart can be enabled in **Settings** ("Start local server when needed").
+
+### Verify local runtime with the smoke runner
+
+Check local model availability, endpoint latency, and profile health without touching the database:
+
+```bash
+python -m local_ledger.llm.smoke --profile ollama
+python -m local_ledger.llm.smoke --profile ds4
+python -m local_ledger.llm.smoke --profile glm
+```
+
+Returns `PASS` (with latency measurement), `DEFERRED` (if server or model is not ready), or `FAILED`.
+
+## Local LLM degradation contract
+
+The app probes the configured server at startup and on every page; each LLM feature shows a
 deterministic message (never a raw exception) when it's unavailable:
 
 | State | What you see |
 |---|---|
-| `NOT_INSTALLED` | "Install Ollama from https://ollama.com …" |
-| `NOT_RUNNING` | "Start the local model server: run `ollama serve`." |
-| `MODEL_MISSING` | "Pull the model: run `ollama pull <model>`." |
-| `READY` | features work normally |
+| `NOT_INSTALLED` | Profile-specific installation guidance (Ollama or DwarfStar) |
+| `NOT_RUNNING` | "Start the local model server..." or autostart prompt |
+| `MODEL_MISSING` | Guidance to pull or select the configured model |
+| `READY` | Features work normally |
 
 The ledger, budgets, and deterministic evaluation always work — only the LLM
 features degrade.
@@ -109,22 +135,21 @@ sent.
 
 ```bash
 # example: point the app at your OpenAI key via the named env var
-setx LOCAL_LEDGER_OPENAI_KEY "sk-..."
+export LOCAL_LEDGER_OPENAI_KEY="sk-..."    # on Windows: setx LOCAL_LEDGER_OPENAI_KEY "sk-..."
 # then set "API key ENV var name" = LOCAL_LEDGER_OPENAI_KEY in Settings
 ```
 
 ## Tests
 
 ```bash
-.venv\Scripts\python.exe -m pytest tests/unit -q      # fast gate (~15s)
-.venv\Scripts\python.exe -m pytest tests/unit -q      # includes perf (10K-row seed)
-.venv\Scripts\python.exe -m pytest -m integration -q  # real-Ollama spikes (optional)
-.venv\Scripts\ruff check src tests app.py app_pages
+pytest tests/unit -q                 # fast unit test suite
+pytest -m integration -q             # real local runtime spikes (optional, reports DEFERRED if unavailable)
+ruff check src tests app.py app_pages
 ```
 
-Integration tests (LLM quality spike, structured-output spike) require Ollama
-running and are deselected by default; they record a SKIP-deferred verdict if
-Ollama is absent.
+Integration tests (LLM quality spike, structured-output spike, runtime smoke) require
+a running local server and are deselected by default; they record a SKIP-deferred verdict
+if the server is absent.
 
 ## Migration policy
 
@@ -133,7 +158,7 @@ schema changes apply automatically. To regenerate the migration after a model
 change:
 
 ```bash
-.venv\Scripts\alembic revision --autogenerate -m "describe change"
+alembic revision --autogenerate -m "describe change"
 ```
 
 ## Scope boundaries

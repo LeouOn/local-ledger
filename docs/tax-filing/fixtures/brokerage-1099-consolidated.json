@@ -1,0 +1,79 @@
+{
+  "document_id": "synth-doc-1099-001",
+  "document_type": "1099_CONSOLIDATED",
+  "tax_year": 2025,
+  "payer": "Synthetic Brokerage Services LLC",
+  "recipient_account_masked": "XXXX-4819",
+  "interest_1099_int": {
+    "box1_interest_income_cents": 142550,
+    "box2_early_withdrawal_penalty_cents": 0,
+    "box3_us_savings_bonds_treasury_cents": 25000,
+    "box4_federal_tax_withheld_cents": 0,
+    "box8_tax_exempt_interest_cents": 0
+  },
+  "dividends_1099_div": {
+    "box1a_total_ordinary_dividends_cents": 385000,
+    "box1b_qualified_dividends_cents": 290000,
+    "box2a_total_capital_gain_distr_cents": 45000,
+    "box3_nondividend_distributions_cents": 0,
+    "box4_federal_tax_withheld_cents": 0,
+    "box7_foreign_tax_paid_cents": 8500
+  },
+  "transactions_1099_b": [
+    {
+      "id": "lot-001",
+      "description": "ACME CORP (100 SHS)",
+      "cusip": "001234101",
+      "date_acquired": "2024-03-15",
+      "date_sold": "2025-06-20",
+      "proceeds_cents": 1250000,
+      "cost_basis_cents": 980000,
+      "gain_loss_cents": 270000,
+      "term": "LONG_TERM",
+      "basis_reported_to_irs": true,
+      "wash_sale_disallowed_cents": 0,
+      "locator": {
+        "page_number": 4,
+        "box_or_line": "1099-B Long Term Covered Line 1",
+        "snippet_text": "ACME CORP 100.000 03/15/2024 06/20/2025 $12,500.00 $9,800.00 $2,700.00"
+      }
+    },
+    {
+      "id": "lot-002",
+      "description": "BETA TECH (50 SHS)",
+      "cusip": "005678202",
+      "date_acquired": "2025-01-10",
+      "date_sold": "2025-04-12",
+      "proceeds_cents": 420000,
+      "cost_basis_cents": 510000,
+      "gain_loss_cents": -90000,
+      "term": "SHORT_TERM",
+      "basis_reported_to_irs": true,
+      "wash_sale_disallowed_cents": 32000,
+      "net_gain_loss_cents": -58000,
+      "locator": {
+        "page_number": 3,
+        "box_or_line": "1099-B Short Term Covered Line 2",
+        "snippet_text": "BETA TECH 50.000 01/10/2025 04/12/2025 $4,200.00 $5,100.00 -$900.00 W $320.00"
+      }
+    },
+    {
+      "id": "lot-003",
+      "description": "GAMMA HOLDINGS (200 SHS)",
+      "cusip": "009999303",
+      "date_acquired": null,
+      "date_sold": "2025-09-18",
+      "proceeds_cents": 310000,
+      "cost_basis_cents": 0,
+      "gain_loss_cents": 310000,
+      "term": "LONG_TERM",
+      "basis_reported_to_irs": false,
+      "is_basis_missing": true,
+      "locator": {
+        "page_number": 5,
+        "box_or_line": "1099-B Long Term Noncovered Line 1",
+        "snippet_text": "GAMMA HOLDINGS 200.000 VARIOUS 09/18/2025 $3,100.00 [NOT REPORTED]"
+      }
+    }
+  ]
+}

@@ -2,7 +2,9 @@
 
 The LLM proposes transactions via structured output; the service NEVER writes to
 the ledger during parse. The user reviews the proposals and ``commit_proposals``
-writes only the accepted subset, atomically, via the import pipeline.
+writes only the accepted subset, atomically - through the same staging, dedup,
+review and audit path as a CSV import, so pasted text gets the same duplicate
+protection, the same provenance and the same audit trail.
 """
 
 from __future__ import annotations
@@ -12,10 +14,11 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from local_ledger.db import transaction_with_retry
-from local_ledger.ledger import audit
+from local_ledger.ingest.csv_import import ParsedTransaction
+from local_ledger.ingest.importer import CommitResult, ImportService
+from local_ledger.ingest.payees import resolve_category
 from local_ledger.llm.structured import StructuredOutputError, extract
-from local_ledger.models import Transaction
+from local_ledger.models import DedupStatus, Transaction
 
 
 class _ParsedItem(BaseModel):
@@ -95,28 +98,66 @@ class PasteParseService:
         *,
         account_id: int,
         actor: str = "user",
+        batch_label: str = "paste",
     ) -> list[Transaction]:
-        def _op() -> list[Transaction]:
-            created: list[Transaction] = []
-            for p in proposals:
-                tx = Transaction(
-                    account_id=account_id,
-                    date=p.date,
-                    amount_cents=p.amount_cents,
-                    created_by=actor,
-                )
-                self.session.add(tx)
-                self.session.flush()
-                audit.record(
-                    self.session,
-                    entity_type="transaction",
-                    entity_id=tx.id,
-                    action="create",
-                    actor=actor,
-                    after=tx,
-                )
-                created.append(tx)
-            self.session.commit()
-            return created
+        """Stage the accepted proposals and commit them, returning the new rows.
 
-        return transaction_with_retry(_op)
+        Thin wrapper over :meth:`commit_accepted` for callers that only need the
+        written transactions; use the latter to see what was held back.
+        """
+        return self.commit_accepted(
+            proposals, account_id=account_id, actor=actor, batch_label=batch_label
+        ).created
+
+    def commit_accepted(
+        self,
+        proposals: list[PasteParseProposal],
+        *,
+        account_id: int,
+        actor: str = "user",
+        batch_label: str = "paste",
+    ) -> CommitResult:
+        """Route proposals through staging, then commit what needs no decision.
+
+        The rows the caller hands over are the accepted subset, so rows the
+        dedup engine called NEW are accepted explicitly here. A row that is
+        FUZZY is *not*: it matched something already in the ledger, and the
+        paste editor does not show the user that, so it goes to the review
+        queue and is reported as ``needs-acceptance`` instead of being written
+        behind the user's back. EXACT rows are already in the ledger and are
+        skipped.
+
+        Payee and suggested category survive into the staged row; a category
+        name that matches nothing stays unresolved rather than creating a new
+        budget category.
+        """
+        importer = ImportService(self.session)
+        parsed = [
+            ParsedTransaction(
+                date=p.date,
+                amount_cents=p.amount_cents,
+                payee_raw=p.payee,
+                imported_id=None,
+            )
+            for p in proposals
+        ]
+        staged = importer.stage(parsed, account_id, batch_label=batch_label)
+        # Category ids live on the staged row. An unmatched name leaves the row's
+        # category unset instead of creating a budget category the user never had.
+        for row, proposal in zip(staged, proposals, strict=True):
+            category = resolve_category(self.session, proposal.suggested_category)
+            if category is not None:
+                row.suggested_category_id = category.id
+                self.session.add(row)
+        if any(r.suggested_category_id is not None for r in staged):
+            self.session.commit()
+        ids = [s.id for s in staged if s.id is not None]
+        undecided = [s.id for s in staged if s.dedup_status is not DedupStatus.NEW]
+        if ids:
+            importer.accept([i for i in ids if i not in set(undecided)])
+        return importer.commit(
+            ids,
+            actor=actor,
+            account_id=account_id,
+            batch=staged[0].import_batch if staged else None,
+        )

@@ -38,7 +38,13 @@ from pathlib import Path
 
 from local_ledger.llm.ollama import OllamaState, detect_state
 
-DS4_HOME = "~/Projects/ds4"
+
+def get_ds4_home() -> str:
+    """Configurable directory for DwarfStar engine launchers."""
+    return os.environ.get("LOCAL_LEDGER_DS4_HOME") or os.environ.get("DS4_HOME") or "~/Projects/ds4"
+
+
+DS4_HOME = get_ds4_home()
 DS4_PORT = 8000
 
 
@@ -49,6 +55,7 @@ class LocalProfile:
     base_url: str  # OpenAI-compatible base URL (includes /v1)
     model: str  # model ID the server reports via model listing
     launch: tuple[str, ...]  # argv; argv[0] may contain ~
+    launch_env: tuple[tuple[str, str], ...] = ()  # extra env for the launcher
     cwd: str | None = None  # working directory for the launch command
     # False when the launcher fixes the served model (DwarfStar scripts load
     # exactly one GGUF): a custom model setting then cannot be produced by
@@ -69,18 +76,43 @@ PROFILES: dict[str, LocalProfile] = {
         label="DwarfStar (DeepSeek V4 Flash)",
         base_url=f"http://127.0.0.1:{DS4_PORT}/v1",
         model="deepseek-v4-flash",
-        # run-ds4f.sh selects the ROCm build, the exact GGUF, and ctx.
-        launch=(f"{DS4_HOME}/run-ds4f.sh", "server"),
+        # Certified smoke config (~/pi-smoke/RESULTS.md): resident load OOMs
+        # on the 58.78 GiB GTT-limited GPU pool, so stream with a bounded
+        # expert cache + KV disk cache at ctx 16384 (CTX env is the script's
+        # override mechanism). Revisit after raising kernel GTT params.
+        launch=(
+            f"{DS4_HOME}/run-ds4f.sh",
+            "server",
+            "--ssd-streaming",
+            "--ssd-streaming-cache-experts",
+            "16GB",
+            "--kv-disk-dir",
+            "/tmp/ds4-kv",
+            "--kv-disk-space-mb",
+            "8192",
+        ),
+        launch_env=(("CTX", "16384"),),
         model_overrides_ok=False,
     ),
     "glm": LocalProfile(
         key="glm",
         label="DwarfStar (GLM 5.3 Flash)",
         base_url=f"http://127.0.0.1:{DS4_PORT}/v1",
-        model="glm-5.3-flash",
-        # run-glm.sh adds SSD streaming, the 100GB expert cache, MTP, and the
-        # GLM memory guard reserve; only it should configure those.
-        launch=(f"{DS4_HOME}/run-glm.sh", "server"),
+        # The uncensored GLM 5.3 Flash GGUF is LISTED as "glm-5.2" by the
+        # server (DSA engine); health checks must use the listed id. Request
+        # aliases like "glm-5.3-flash" also work, but only the listed id
+        # appears in /v1/models.
+        model="glm-5.2",
+        # run-glm.sh adds SSD streaming, the 100GB expert cache (self-fits),
+        # MTP, and the GLM memory guard; only it should configure those.
+        launch=(
+            f"{DS4_HOME}/run-glm.sh",
+            "server",
+            "--kv-disk-dir",
+            "/tmp/ds4-kv-glm",
+            "--kv-disk-space-mb",
+            "8192",
+        ),
         model_overrides_ok=False,
     ),
 }
@@ -99,10 +131,50 @@ def profile_from_settings(settings: object) -> LocalProfile:
     return PROFILES.get(key, PROFILES[DEFAULT_PROFILE_KEY])
 
 
-def resolve_launcher(profile: LocalProfile) -> str | None:
-    """Absolute path of the profile's launch command, or None when absent."""
-    argv0 = os.path.expanduser(profile.launch[0])
-    return shutil.which(argv0)
+def resolve_launcher(
+    profile: LocalProfile,
+    *,
+    which: Callable[[str], str | None] = shutil.which,
+) -> str | None:
+    """Absolute path of the profile's launch command, or None when absent.
+
+    Resolves via:
+    1. Direct executable path via `which(argv0)`.
+    2. PATH lookup of executable basename (e.g. `run-ds4f.sh` on PATH).
+    3. Configured/discoverable DS4 directories from `LOCAL_LEDGER_DS4_HOME` / `DS4_HOME` / `~/Projects/ds4`.
+    """
+    raw_argv0 = profile.launch[0]
+    argv0 = os.path.expanduser(raw_argv0)
+    found = which(argv0)
+    if found:
+        return found
+
+    name = Path(argv0).name
+
+    # For DwarfStar scripts (or commands configured without absolute paths), allow
+    # PATH discovery or candidate home overrides.
+    if profile.key in ("ds4", "glm") or name in ("run-ds4f.sh", "run-glm.sh"):
+        found = which(name)
+        if found:
+            return found
+        candidate_homes = [
+            os.environ.get("LOCAL_LEDGER_DS4_HOME"),
+            os.environ.get("DS4_HOME"),
+            "~/Projects/ds4",
+        ]
+        for home in candidate_homes:
+            if not home:
+                continue
+            cand = str(Path(os.path.expanduser(home)) / name)
+            found = which(cand)
+            if found:
+                return found
+    elif "/" not in raw_argv0 and "\\" not in raw_argv0:
+        found = which(name)
+        if found:
+            return found
+
+    return None
 
 
 @dataclass
@@ -133,6 +205,7 @@ class LocalServerManager:
         poll_interval: float = 0.5,
         startup_timeout: float = 300.0,
         max_log_lines: int = 200,
+        which: Callable[[str], str | None] = shutil.which,
     ) -> None:
         self._lock = threading.Lock()
         self._status: ServerStatus | None = None
@@ -145,10 +218,17 @@ class LocalServerManager:
         self._poll_interval = poll_interval
         self._startup_timeout = startup_timeout
         self._max_log_lines = max_log_lines
+        self._which = which
 
     def status(self) -> ServerStatus | None:
         with self._lock:
             return self._status
+
+    def _resolve_launcher(self, profile: LocalProfile) -> str | None:
+        try:
+            return resolve_launcher(profile, which=self._which)
+        except TypeError:
+            return resolve_launcher(profile)
 
     def ensure_running(
         self,
@@ -243,7 +323,7 @@ class LocalServerManager:
                     name=f"local-server-{profile.key}",
                 ).start()
                 return status
-            launcher = resolve_launcher(profile)
+            launcher = self._resolve_launcher(profile)
             if launcher is None:
                 self._status = ServerStatus(
                     profile=profile.key,
@@ -254,11 +334,13 @@ class LocalServerManager:
                 return self._status
             argv = [launcher, *(os.path.expanduser(a) for a in profile.launch[1:])]
             cwd = os.path.expanduser(profile.cwd) if profile.cwd else None
+            env = {**os.environ, **dict(profile.launch_env)}
             try:
                 log_path = self._log_path(profile.key)
                 log_path.parent.mkdir(parents=True, exist_ok=True)
                 # Detached child, argv list (no shell), output to a log file so
-                # the pipe can never fill and block the server.
+                # the pipe can never fill and block the server. Profile env
+                # (e.g. CTX) rides along on top of the current environment.
                 with log_path.open("ab") as logf:
                     logf.write(
                         f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting "
@@ -271,6 +353,7 @@ class LocalServerManager:
                         stderr=subprocess.STDOUT,
                         stdin=subprocess.DEVNULL,
                         start_new_session=True,
+                        env=env,
                     )
             except OSError as exc:
                 self._status = ServerStatus(

@@ -6,8 +6,10 @@ import pandas as pd
 import streamlit as st
 from sqlmodel import select
 
+from local_ledger.ingest.importer import ImportService
+from local_ledger.ingest.review_ui import render_staged_review
 from local_ledger.ledger.service import LedgerService
-from local_ledger.models import Account, Category, ReviewState, StagedTransaction, Transaction
+from local_ledger.models import Account, Category, Transaction
 from local_ledger.ui.chrome import get_session
 from local_ledger.ui.components import section_header
 
@@ -95,22 +97,18 @@ with st.expander("Transfer between accounts"):
 
 st.divider()
 section_header("REVIEW", "Review queues")
-
-st.caption("Dedup (fuzzy) candidates")
-fuzzy = [s for s in session.exec(select(StagedTransaction)).all() if s.dedup_status == "FUZZY"]
-if fuzzy:
-    fdf = pd.DataFrame(
-        [{"id": s.id, "date": s.date, "amount_cents": s.amount_cents, "payee": s.payee_raw} for s in fuzzy]
-    )
-    st.dataframe(fdf, use_container_width=False)
-    if st.button("Accept first fuzzy candidate"):
-        first = fuzzy[0]
-        first.review_state = ReviewState.ACCEPTED
-        session.add(first)
-        session.commit()
-        st.success("Accepted — return to Import to commit.")
-else:
-    st.caption("No fuzzy dedup candidates.")
+st.caption(
+    "Staged rows from imports and paste-parse. Accept or reject them here; commit them "
+    "from the Import page, where the batch stays in scope."
+)
+render_staged_review(
+    ImportService(session),
+    account_id=None,
+    batch=None,
+    actor="user",
+    key_prefix="tx_review",
+    allow_commit=False,
+)
 
 st.divider()
 section_header("FILTER", "Filters")

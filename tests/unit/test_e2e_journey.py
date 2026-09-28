@@ -32,13 +32,18 @@ def test_full_user_journey(engine) -> None:  # type: ignore[no-untyped-def]
     rent = ledger.create_category(name="Rent")
     fun = ledger.create_category(name="Fun")
 
-    # 2. import 50 transactions
+    # 2. import 50 transactions (review-then-commit, as the Import page does)
     parsed = [
         ParsedTransaction(date="2026-01-02", amount_cents=-(100 + i), payee_raw=f"Merchant {i}")
         for i in range(50)
     ]
     staged = importer.stage(parsed, acc.id, batch_label="jan-statement")
-    importer.commit([s.id for s in staged], actor="import:jan.csv")
+    importer.accept([s.id for s in staged])
+    result = importer.commit(
+        [s.id for s in staged], actor="import:jan.csv", account_id=acc.id, batch="jan-statement"
+    )
+    assert len(result.created) == 50
+    assert result.skipped == []
 
     # 3. set 3 budgets
     for cat, amt in [(food, 20000), (rent, 100000), (fun, 5000)]:

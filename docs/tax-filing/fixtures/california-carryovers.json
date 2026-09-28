@@ -1,0 +1,46 @@
+{
+  "tax_year": 2025,
+  "jurisdiction_comparisons": {
+    "capital_losses": {
+      "prior_year_loss_carryover_cents": 750000,
+      "federal_annual_deduction_limit_cents": 300000,
+      "california_annual_deduction_limit_cents": 300000,
+      "utilized_current_year_cents": 300000,
+      "remaining_carryover_cents": 450000,
+      "federal_reference": "2024 Form 1040 Schedule D Capital Loss Carryover Worksheet line 14",
+      "california_reference": "2024 FTB Form 540 Schedule D (540) line 6"
+    },
+    "depreciation_adjustments": [
+      {
+        "property_id": "prop-001",
+        "asset_name": "Citrus Lane Residential Structure",
+        "date_acquired": "2021-08-01",
+        "federal_depreciation_cents": 181818,
+        "california_depreciation_cents": 181818,
+        "difference_cents": 0,
+        "recovery_years": 27.5,
+        "method": "Straight Line"
+      },
+      {
+        "property_id": "prop-001",
+        "asset_name": "Appliance Package (Stove/Refrigerator)",
+        "date_acquired": "2023-01-15",
+        "cost_basis_cents": 320000,
+        "federal_prior_depreciation_cents": 256000,
+        "california_prior_depreciation_cents": 144000,
+        "federal_2025_depreciation_cents": 32000,
+        "california_2025_depreciation_cents": 64000,
+        "difference_cents": -32000,
+        "explanation": "California does not conform to federal 80% bonus depreciation under IRC § 168(k). Federal claimed bonus depreciation in 2023; California depreciates over MACRS 5-year straight line without bonus. Schedule CA (540) column B subtraction adjustment required."
+      }
+    ],
+    "passive_activity_losses": {
+      "california_form": "FTB 3801",
+      "federal_form": "Form 8582",
+      "special_allowance_limit_cents": 2500000,
+      "magi_phaseout_start_cents": 10000000,
+      "magi_phaseout_end_cents": 15000000,
+      "note": "Active participation in residential rental real estate permits up to $25,000 deduction against nonpassive income, phasing out between $100k-$150k MAGI under both federal and CA rules."
+    }
+  }
+}
