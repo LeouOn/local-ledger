@@ -37,6 +37,12 @@ def _validate_int_cents(value: object) -> int:
     return value
 
 
+def _validate_optional_int_cents(value: object) -> int | None:
+    if value is None:
+        return None
+    return _validate_int_cents(value)
+
+
 class DocumentType(StrEnum):
     FORM_1099_CONSOLIDATED = "1099_CONSOLIDATED"
     FORM_1099_B = "1099_B"
@@ -230,12 +236,17 @@ class AssetDepreciation(SQLModel, table=True):
     cost_basis_cents: int
     land_value_cents: int = Field(default=0)
     depreciable_basis_cents: int
-    recovery_years: float = Field(default=27.5)
+    recovery_period_months: int = Field(default=330)  # 330 months for 27.5-year residential rental
     prior_depreciation_fed_cents: int = Field(default=0)
     prior_depreciation_ca_cents: int = Field(default=0)
     current_depreciation_fed_cents: int = Field(default=0)
     current_depreciation_ca_cents: int = Field(default=0)
     state_difference_reason: str = Field(default="MACRS vs CA Modified S/L")
+
+    @property
+    def recovery_years(self) -> float:
+        """Helper returning recovery period in years (e.g. 27.5)."""
+        return self.recovery_period_months / 12.0
 
     @field_validator("cost_basis_cents", "land_value_cents", "depreciable_basis_cents", mode="before")
     @classmethod
@@ -263,8 +274,8 @@ class InvestmentSaleRecord(SQLModel, table=True):
     date_acquired: str | None = Field(default=None)
     date_sold: str
     proceeds_cents: int
-    cost_basis_cents: int
-    gain_loss_cents: int
+    cost_basis_cents: int | None = Field(default=None)  # None indicates missing/noncovered basis
+    gain_loss_cents: int | None = Field(default=None)    # None indicates undetermined gain/loss
     term: str = Field(default=HoldingTerm.SHORT_TERM)
     basis_reported_to_irs: bool = Field(default=True)
     wash_sale_disallowed_cents: int = Field(default=0)
@@ -272,10 +283,15 @@ class InvestmentSaleRecord(SQLModel, table=True):
     status: str = Field(default=EvidenceStatus.PROPOSED, index=True)
     raw_text: str = Field(default="")
 
-    @field_validator("proceeds_cents", "cost_basis_cents", "gain_loss_cents", "wash_sale_disallowed_cents", mode="before")
+    @field_validator("proceeds_cents", "wash_sale_disallowed_cents", "fed_ca_difference_cents", mode="before")
     @classmethod
     def _check_cents(cls, v: object) -> int:
         return _validate_int_cents(v)
+
+    @field_validator("cost_basis_cents", "gain_loss_cents", mode="before")
+    @classmethod
+    def _check_optional_cents(cls, v: object) -> int | None:
+        return _validate_optional_int_cents(v)
 
     @field_validator("date_sold")
     @classmethod
@@ -300,15 +316,20 @@ class JurisdictionCarryover(SQLModel, table=True):
     jurisdiction: str = Field(default=Jurisdiction.FEDERAL, index=True)
     category: str = Field(default="CAPITAL_LOSS", index=True)
     property_id: str | None = Field(default=None)
-    prior_year_cents: int = Field(default=0)
+    prior_year_cents: int | None = Field(default=None)  # None indicates missing prior return
     utilized_current_year_cents: int = Field(default=0)
-    remaining_carryover_cents: int = Field(default=0)
+    remaining_carryover_cents: int | None = Field(default=None)
     prior_return_reference: str = Field(default="")
 
-    @field_validator("prior_year_cents", "utilized_current_year_cents", "remaining_carryover_cents", mode="before")
+    @field_validator("utilized_current_year_cents", mode="before")
     @classmethod
     def _check_cents(cls, v: object) -> int:
         return _validate_int_cents(v)
+
+    @field_validator("prior_year_cents", "remaining_carryover_cents", mode="before")
+    @classmethod
+    def _check_optional_cents(cls, v: object) -> int | None:
+        return _validate_optional_int_cents(v)
 
 
 class TaxQuestion(SQLModel, table=True):

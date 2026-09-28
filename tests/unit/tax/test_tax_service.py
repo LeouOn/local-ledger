@@ -296,15 +296,30 @@ def test_investment_sale_records(tax_service: TaxWorkspaceService) -> None:
         raw_text="$12,000.00",
     )
 
-    # Verify both sales
+    # Record a sale with missing/undetermined basis (noncovered security)
+    sale_missing = tax_service.record_investment_sale(
+        workspace_id=ws.id,
+        source_document_id="doc-brokerage",
+        security_description="CRYPTO_TOKEN",
+        date_sold="2025-09-10",
+        proceeds_cents=300000,
+        cost_basis_cents=None,
+        gain_loss_cents=None,
+        term="SHORT_TERM",
+        basis_reported_to_irs=False,
+    )
+    # Verify all sales
     tax_service.verify_investment_sale(sale_st.id)
     tax_service.verify_investment_sale(sale_lt.id)
+    tax_service.verify_investment_sale(sale_missing.id)
 
     gains = tax_service.compute_verified_investment_gains(ws.id)
-    assert gains["short_term_proceeds_cents"] == 500000
+    assert gains["short_term_proceeds_cents"] == 800000
+    assert gains["short_term_basis_cents"] == 450000
     assert gains["short_term_gain_loss_cents"] == 50000
     assert gains["long_term_proceeds_cents"] == 1200000
     assert gains["long_term_gain_loss_cents"] == 400000
+    assert gains["missing_basis_count"] == 1
 
 
 def test_workspace_locking(tax_service: TaxWorkspaceService) -> None:

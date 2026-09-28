@@ -121,12 +121,14 @@ def test_asset_depreciation_model() -> None:
         cost_basis_cents=850000,
         land_value_cents=0,
         depreciable_basis_cents=850000,
-        recovery_years=27.5,
+        recovery_period_months=330,
         current_depreciation_fed_cents=30909,
         current_depreciation_ca_cents=30909,
     )
     assert asset.id.startswith("ast-")
     assert asset.cost_basis_cents == 850000
+    assert asset.recovery_period_months == 330
+    assert asset.recovery_years == 27.5
 
     with pytest.raises(ValidationError, match="floats are forbidden"):
         AssetDepreciation(
@@ -141,6 +143,7 @@ def test_asset_depreciation_model() -> None:
 
 
 def test_investment_sale_record_model() -> None:
+    # Fully known basis
     sale = InvestmentSaleRecord(
         workspace_id="ws-123",
         source_document_id="doc-123",
@@ -154,6 +157,20 @@ def test_investment_sale_record_model() -> None:
     )
     assert sale.id.startswith("sec-")
     assert sale.gain_loss_cents == 200000
+
+    # Missing / noncovered basis explicitly allowed as None
+    sale_missing_basis = InvestmentSaleRecord(
+        workspace_id="ws-123",
+        source_document_id="doc-123",
+        security_description="CRYPTO ASSET LOT 1",
+        date_sold="2025-10-15",
+        proceeds_cents=500000,
+        cost_basis_cents=None,
+        gain_loss_cents=None,
+        basis_reported_to_irs=False,
+    )
+    assert sale_missing_basis.cost_basis_cents is None
+    assert sale_missing_basis.gain_loss_cents is None
 
     # Invalid sold date
     with pytest.raises(ValidationError, match="YYYY-MM-DD"):
@@ -169,6 +186,7 @@ def test_investment_sale_record_model() -> None:
 
 
 def test_jurisdiction_carryover_and_reconciliation_item() -> None:
+    # Known carryover
     carryover = JurisdictionCarryover(
         workspace_id="ws-123",
         jurisdiction=Jurisdiction.CALIFORNIA,
@@ -179,6 +197,16 @@ def test_jurisdiction_carryover_and_reconciliation_item() -> None:
     )
     assert carryover.id.startswith("cry-")
     assert carryover.prior_year_cents == 300000
+
+    # Unknown carryover when 2024 return is not available
+    unknown_carryover = JurisdictionCarryover(
+        workspace_id="ws-123",
+        jurisdiction=Jurisdiction.CALIFORNIA,
+        category="PASSIVE_LOSS",
+        prior_year_cents=None,
+        remaining_carryover_cents=None,
+    )
+    assert unknown_carryover.prior_year_cents is None
 
     rec = ReconciliationItem(
         workspace_id="ws-123",

@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy import func
 from sqlmodel import Session, select
 
@@ -533,8 +534,8 @@ class TaxWorkspaceService:
         security_description: str,
         date_sold: str,
         proceeds_cents: int,
-        cost_basis_cents: int,
-        gain_loss_cents: int,
+        cost_basis_cents: int | None = None,
+        gain_loss_cents: int | None = None,
         cusip_or_ticker: str | None = None,
         date_acquired: str | None = None,
         term: str = "SHORT_TERM",
@@ -544,7 +545,11 @@ class TaxWorkspaceService:
         raw_text: str = "",
         status: str = EvidenceStatus.PROPOSED,
     ) -> InvestmentSaleRecord:
-        """Record an investment disposition line item."""
+        """Record an investment disposition line item.
+
+        cost_basis_cents and gain_loss_cents can be None to explicitly record
+        missing/undetermined basis (e.g. noncovered securities on Form 1099-B).
+        """
         workspace = self._require_workspace(workspace_id)
         self._check_not_locked(workspace)
 
@@ -590,14 +595,17 @@ class TaxWorkspaceService:
         """Aggregate approved investment sales by holding term.
 
         Strict Invariant: ONLY VERIFIED sales are counted.
+        Also tracks missing_basis_count so missing cost basis is never silently treated as 0.
         """
         stmt = (
             select(
                 InvestmentSaleRecord.term,
                 func.sum(InvestmentSaleRecord.proceeds_cents),
-                func.sum(InvestmentSaleRecord.cost_basis_cents),
-                func.sum(InvestmentSaleRecord.gain_loss_cents),
+                func.sum(func.coalesce(InvestmentSaleRecord.cost_basis_cents, 0)),
+                func.sum(func.coalesce(InvestmentSaleRecord.gain_loss_cents, 0)),
                 func.sum(InvestmentSaleRecord.wash_sale_disallowed_cents),
+                func.count(InvestmentSaleRecord.id),
+                func.sum(sa.case((InvestmentSaleRecord.cost_basis_cents.is_(None), 1), else_=0)),
             )
             .where(
                 InvestmentSaleRecord.workspace_id == workspace_id,
@@ -615,13 +623,15 @@ class TaxWorkspaceService:
             "long_term_basis_cents": 0,
             "long_term_gain_loss_cents": 0,
             "long_term_wash_sale_disallowed_cents": 0,
+            "missing_basis_count": 0,
         }
-        for term, proceeds, basis, gain, wash in rows:
+        for term, proceeds, basis, gain, wash, _total_count, missing_basis in rows:
             prefix = "short_term" if term == "SHORT_TERM" else "long_term"
             summary[f"{prefix}_proceeds_cents"] = int(proceeds or 0)
             summary[f"{prefix}_basis_cents"] = int(basis or 0)
             summary[f"{prefix}_gain_loss_cents"] = int(gain or 0)
             summary[f"{prefix}_wash_sale_disallowed_cents"] = int(wash or 0)
+            summary["missing_basis_count"] += int(missing_basis or 0)
         return summary
 
     # -------------------------------------------------------------------------
