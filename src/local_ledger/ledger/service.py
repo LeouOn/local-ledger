@@ -16,6 +16,7 @@ from sqlmodel import Session, select
 
 from local_ledger.db import transaction_with_retry
 from local_ledger.ledger import audit
+from local_ledger.ledger.invalidation import notify_transactions_changed
 from local_ledger.models import (
     Account,
     AccountType,
@@ -195,6 +196,11 @@ class LedgerService:
                         before=victim,
                     )
                     self.session.delete(victim)
+            # Any tax comparison that consumed these rows is now comparing against
+            # evidence that no longer exists. This must happen before the commit so
+            # the invalidation and the deletion are atomic; without this call the
+            # comparison stayed MATCHED after a real deletion.
+            notify_transactions_changed(self.session, ids_to_delete)
             self.session.commit()
 
         transaction_with_retry(_op)

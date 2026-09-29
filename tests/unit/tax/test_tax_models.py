@@ -38,8 +38,9 @@ def test_tax_workspace_defaults_and_id_prefix() -> None:
     assert ws.id.startswith("ws-")
     assert ws.tax_year == 2025
     assert ws.jurisdiction == Jurisdiction.FEDERAL
-    assert ws.residency_status == ResidencyStatus.FULL_YEAR
-    assert ws.filing_status == FilingStatus.SINGLE
+    # Neither fact is confirmed by the user, so the default must not assert one.
+    assert ws.residency_status == ResidencyStatus.UNKNOWN
+    assert ws.filing_status == FilingStatus.UNKNOWN
     assert ws.status == WorkspaceStatus.DRAFT
 
 

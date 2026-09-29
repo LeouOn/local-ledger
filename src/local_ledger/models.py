@@ -328,6 +328,12 @@ class Rule(SQLModel, table=True):
 
 
 # Re-export Tax domain models (TAX-04) so they register on SQLModel.metadata
+# Re-export TAX-06 domain models so they register on SQLModel.metadata
+from local_ledger.tax.classification import (  # noqa: E402,F401
+    ClassificationState,
+    ClassificationSubject,
+    TaxClassification,
+)
 from local_ledger.tax.models import (  # noqa: E402,F401
     AssetDepreciation,
     DocumentType,
@@ -349,4 +355,9 @@ from local_ledger.tax.models import (  # noqa: E402,F401
     TaxQuestion,
     TaxWorkspace,
     WorkspaceStatus,
+)
+from local_ledger.tax.reconciliation import (  # noqa: E402,F401
+    ReconciliationRun,
+    RunState,
+    TotalBasis,
 )

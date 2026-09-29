@@ -79,6 +79,28 @@ class DuplicateDocumentError(TaxServiceError):
     """Raised when an identical document hash is uploaded for the same workspace."""
 
 
+class WorkspaceScopeError(TaxServiceError):
+    """Raised when a caller reaches across workspaces or tax years.
+
+    Evidence may only be attached to a document belonging to the same workspace.
+    Crossing that boundary is how a 2025 amount ends up in a 2024 total, or a
+    correction in one year silently rewrites another year's evidence.
+    """
+
+
+class InvalidStateTransitionError(TaxServiceError):
+    """Raised when an evidence record is moved between states illegally.
+
+    PROPOSED is the only state that may become VERIFIED or REJECTED. SUPERSEDED,
+    REJECTED and VERIFIED are terminal for human review: the way back is a new
+    proposal against a current document, never a status flip.
+    """
+
+
+class PacketReadinessError(TaxServiceError):
+    """Raised when a final evidence packet is requested before review is done."""
+
+
 class TaxWorkspaceService:
     """Service governing annual tax workspaces, evidence lifecycle, and audit integrity."""
 
@@ -93,10 +115,15 @@ class TaxWorkspaceService:
         self,
         tax_year: int,
         jurisdiction: str = Jurisdiction.FEDERAL,
-        residency_status: str = ResidencyStatus.FULL_YEAR,
-        filing_status: str = FilingStatus.SINGLE,
+        residency_status: str = ResidencyStatus.UNKNOWN,
+        filing_status: str = FilingStatus.UNKNOWN,
     ) -> TaxWorkspace:
-        """Fetch existing workspace for year + jurisdiction, or create a new draft."""
+        """Fetch existing workspace for year + jurisdiction, or create a new draft.
+
+        Residency and filing status default to UNKNOWN, never to a specific
+        answer. Neither has been confirmed, and a defaulted fact would be
+        indistinguishable from a confirmed one everywhere downstream.
+        """
         stmt = select(TaxWorkspace).where(
             TaxWorkspace.tax_year == tax_year,
             TaxWorkspace.jurisdiction == jurisdiction,
@@ -135,6 +162,47 @@ class TaxWorkspaceService:
                 f"Workspace for year {workspace.tax_year} ({workspace.jurisdiction}) is LOCKED and immutable"
             )
 
+    def _require_document_in_workspace(
+        self,
+        workspace: TaxWorkspace,
+        document_id: str,
+    ) -> TaxDocument:
+        """Return the document, refusing anything outside the workspace.
+
+        Three failures are all the same failure from an auditor's point of view:
+        the document does not exist, it belongs to a different workspace (or tax
+        year), or it has itself been superseded by a correction. In each case the
+        amount must not enter this workspace's evidence.
+        """
+        doc = self.session.get(TaxDocument, document_id)
+        if doc is None:
+            raise DocumentNotFoundError(f"Document {document_id} not found in database")
+        if doc.workspace_id != workspace.id:
+            raise WorkspaceScopeError(
+                f"Document {document_id} belongs to a different workspace or tax year "
+                f"than year {workspace.tax_year} ({workspace.jurisdiction})"
+            )
+        superseding = self.session.exec(
+            select(TaxDocument.id).where(TaxDocument.supersedes_doc_id == document_id)
+        ).first()
+        if superseding is not None:
+            raise DocumentNotFoundError(
+                f"Document {document_id} was superseded by a correction and is no longer a source"
+            )
+        return doc
+
+    def _require_reviewable(self, record: Any, kind: str) -> None:
+        """Only a PROPOSED record may be reviewed; every other state is terminal.
+
+        Without this, a SUPERSEDED field can be flipped back to VERIFIED and put
+        a replaced amount straight back into an approved total.
+        """
+        status = getattr(record, "status", None)
+        if status != EvidenceStatus.PROPOSED:
+            raise InvalidStateTransitionError(
+                f"{kind} {record.id} is {status}; only PROPOSED evidence can be reviewed"
+            )
+
     def lock_workspace(self, workspace_id: str) -> TaxWorkspace:
         """Lock workspace against any further edits."""
         workspace = self._require_workspace(workspace_id)
@@ -163,9 +231,25 @@ class TaxWorkspaceService:
         If `is_corrected` is True and `supersedes_doc_id` is supplied:
         - Marks fields linked to the superseded document as SUPERSEDED.
         - Marks downstream reconciliation items and evidence packets as STALE.
+
+        A correction may only supersede a document in its own workspace; a
+        correction that reached into another tax year would rewrite that year's
+        evidence, so it is refused before anything is written.
         """
         workspace = self._require_workspace(workspace_id)
         self._check_not_locked(workspace)
+
+        if supersedes_doc_id is not None:
+            target = self.session.get(TaxDocument, supersedes_doc_id)
+            if target is None:
+                raise DocumentNotFoundError(
+                    f"Document {supersedes_doc_id} not found in database"
+                )
+            if target.workspace_id != workspace.id:
+                raise WorkspaceScopeError(
+                    f"Cannot supersede document {supersedes_doc_id} from another workspace "
+                    f"or tax year than {workspace.tax_year} ({workspace.jurisdiction})"
+                )
 
         # Check for pre-existing document with same SHA-256 in this workspace
         if isinstance(source, (bytes, bytearray)):
@@ -182,6 +266,21 @@ class TaxWorkspaceService:
         )
         existing = self.session.exec(existing_stmt).first()
         if existing is not None:
+            if supersedes_doc_id is not None and existing.id != supersedes_doc_id:
+                # A correction that re-sends the bytes it claims to replace is not
+                # a correction. Returning the original here would drop the
+                # supersession and leave the replaced evidence live, so it is
+                # refused rather than quietly ignored.
+                raise DuplicateDocumentError(
+                    f"Correction duplicates the bytes of an existing document "
+                    f"({existing.id}) in this workspace; a correction must differ from "
+                    "the document it replaces"
+                )
+            if existing.id == supersedes_doc_id:
+                raise DuplicateDocumentError(
+                    f"Document {supersedes_doc_id} was re-uploaded as its own correction; "
+                    "a correction must be a different document"
+                )
             # Per contract §11: duplicate bytes does not create a second document
             return existing
 
@@ -221,10 +320,21 @@ class TaxWorkspaceService:
         return new_doc
 
     def _handle_supersession(self, workspace_id: str, old_doc_id: str) -> None:
-        """Mark old document's fields as SUPERSEDED and mark downstream items STALE."""
+        """Mark old document's fields as SUPERSEDED and mark downstream items STALE.
+
+        Every query is scoped to the superseded document's own workspace. The
+        document id is unique, so an unscoped query would also be "correct" by
+        accident - but if a caller ever passes a document from another year, the
+        old version of this method marked *that* year's evidence superseded and
+        left the real target untouched.
+        """
+        old_doc = self.session.get(TaxDocument, old_doc_id)
+        scope = old_doc.workspace_id if old_doc is not None else workspace_id
+
         # 1. Supersede ExtractedField rows
         fields_stmt = select(ExtractedField).where(
             ExtractedField.document_id == old_doc_id,
+            ExtractedField.workspace_id == scope,
             ExtractedField.status != EvidenceStatus.SUPERSEDED,
         )
         for field in self.session.exec(fields_stmt).all():
@@ -234,6 +344,7 @@ class TaxWorkspaceService:
         # 2. Supersede RentalExpenseRecord rows linked to old document
         rentals_stmt = select(RentalExpenseRecord).where(
             RentalExpenseRecord.source_document_id == old_doc_id,
+            RentalExpenseRecord.workspace_id == scope,
             RentalExpenseRecord.status != EvidenceStatus.SUPERSEDED,
         )
         for exp in self.session.exec(rentals_stmt).all():
@@ -243,6 +354,7 @@ class TaxWorkspaceService:
         # 3. Supersede InvestmentSaleRecord rows linked to old document
         sales_stmt = select(InvestmentSaleRecord).where(
             InvestmentSaleRecord.source_document_id == old_doc_id,
+            InvestmentSaleRecord.workspace_id == scope,
             InvestmentSaleRecord.status != EvidenceStatus.SUPERSEDED,
         )
         for sale in self.session.exec(sales_stmt).all():
@@ -250,7 +362,7 @@ class TaxWorkspaceService:
             self.session.add(sale)
 
         # 4. Invalidate downstream reconciliation items and packets
-        self._invalidate_downstream(workspace_id)
+        self._invalidate_downstream(scope)
 
     def _invalidate_downstream(self, workspace_id: str) -> None:
         """Mark all reconciliation items and evidence packets in workspace as STALE."""
@@ -301,6 +413,7 @@ class TaxWorkspaceService:
         """Record an unverified extraction proposal from local model or OCR."""
         workspace = self._require_workspace(workspace_id)
         self._check_not_locked(workspace)
+        self._require_document_in_workspace(workspace, document_id)
 
         bbox_json = json.dumps(bounding_box) if bounding_box else None
         prov_json = json.dumps(model_provenance) if model_provenance else None
@@ -331,6 +444,11 @@ class TaxWorkspaceService:
     ) -> ExtractedField:
         """Confirm an extraction proposal, transitioning it to VERIFIED status.
 
+        Only a PROPOSED field may be verified. A SUPERSEDED field belongs to a
+        replaced document and a REJECTED field carries a decision the user made;
+        neither may be flipped back to VERIFIED, or a corrected amount returns
+        to an approved total.
+
         Marks downstream reconciliation lines and evidence packets STALE.
         """
         field = self.session.get(ExtractedField, field_id)
@@ -339,6 +457,7 @@ class TaxWorkspaceService:
 
         workspace = self._require_workspace(field.workspace_id)
         self._check_not_locked(workspace)
+        self._require_reviewable(field, "ExtractedField")
 
         field.status = EvidenceStatus.VERIFIED
         field.verified_by = verified_by
@@ -360,13 +479,18 @@ class TaxWorkspaceService:
         rejected_by: str,
         notes: str,
     ) -> ExtractedField:
-        """Reject an extraction proposal. Retained for audit trail; never enters totals."""
+        """Reject an extraction proposal. Retained for audit trail; never enters totals.
+
+        Rejection is a user decision, so it is terminal: re-proposing the value
+        from the current document is the way back, not re-verifying this row.
+        """
         field = self.session.get(ExtractedField, field_id)
         if field is None:
             raise EntityNotFoundError(f"ExtractedField {field_id} not found")
 
         workspace = self._require_workspace(field.workspace_id)
         self._check_not_locked(workspace)
+        self._require_reviewable(field, "ExtractedField")
 
         field.status = EvidenceStatus.REJECTED
         field.verified_by = rejected_by
@@ -482,13 +606,14 @@ class TaxWorkspaceService:
         return record
 
     def verify_rental_expense(self, expense_id: str) -> RentalExpenseRecord:
-        """Mark a rental expense as VERIFIED."""
+        """Mark a rental expense as VERIFIED. Only PROPOSED rows are reviewable."""
         record = self.session.get(RentalExpenseRecord, expense_id)
         if record is None:
             raise EntityNotFoundError(f"RentalExpenseRecord {expense_id} not found")
 
         workspace = self._require_workspace(record.workspace_id)
         self._check_not_locked(workspace)
+        self._require_reviewable(record, "RentalExpenseRecord")
 
         record.status = EvidenceStatus.VERIFIED
         self.session.add(record)
@@ -552,6 +677,7 @@ class TaxWorkspaceService:
         """
         workspace = self._require_workspace(workspace_id)
         self._check_not_locked(workspace)
+        self._require_document_in_workspace(workspace, source_document_id)
 
         sale = InvestmentSaleRecord(
             workspace_id=workspace_id,
@@ -583,6 +709,7 @@ class TaxWorkspaceService:
 
         workspace = self._require_workspace(sale.workspace_id)
         self._check_not_locked(workspace)
+        self._require_reviewable(sale, "InvestmentSaleRecord")
 
         sale.status = EvidenceStatus.VERIFIED
         self.session.add(sale)
@@ -721,11 +848,15 @@ class TaxWorkspaceService:
     # Invalidation Cascades for Ledger Edits (INV-10)
     # -------------------------------------------------------------------------
 
-    def invalidate_for_transaction_edit(self, transaction_id: int) -> int:
+    def invalidate_for_transaction_edit(self, transaction_id: int, commit: bool = True) -> int:
         """Invalidate reconciliation items that consumed `transaction_id`.
 
         Marks affected ReconciliationItems STALE and affected EvidencePackets stale.
         Returns the count of invalidated reconciliation items.
+
+        ``commit=False`` participates in a caller's transaction instead of
+        committing on its own. The ledger deletion path uses it so the deletion
+        and its invalidation land together, or not at all.
         """
         # Find all reconciliation items with consumed_transaction_ids_json
         stmt = select(ReconciliationItem).where(
@@ -758,7 +889,7 @@ class TaxWorkspaceService:
                 pkt.is_stale = True
                 self.session.add(pkt)
 
-        if invalidated_count:
+        if invalidated_count and commit:
             self.session.commit()
 
         return invalidated_count
@@ -772,8 +903,30 @@ class TaxWorkspaceService:
         workspace_id: str,
         is_draft: bool = True,
     ) -> EvidencePacket:
-        """Create an immutable evidence packet snapshot with content hash."""
+        """Create an immutable evidence packet snapshot with content hash.
+
+        A packet is a claim about the state of the review, so a non-draft packet
+        is refused while any question is still open. A draft is always allowed
+        and always labelled a draft. This gate is what stops an unresolved
+        workspace being presented as reviewed.
+        """
         workspace = self._require_workspace(workspace_id)
+
+        if not is_draft:
+            open_questions = self.session.exec(
+                select(func.count())
+                .select_from(TaxQuestion)
+                .where(
+                    TaxQuestion.workspace_id == workspace_id,
+                    TaxQuestion.status == "OPEN",
+                )
+            ).one()
+            if open_questions:
+                raise PacketReadinessError(
+                    f"Cannot create a final evidence packet for year {workspace.tax_year} "
+                    f"({workspace.jurisdiction}): {open_questions} open question(s) remain. "
+                    "Resolve them, or export a draft."
+                )
 
         # Gather state snapshot
         verified_fields_stmt = select(ExtractedField).where(

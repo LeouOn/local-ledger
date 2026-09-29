@@ -46,7 +46,24 @@ def tax_service(session: Session, engine) -> TaxWorkspaceService:
     return TaxWorkspaceService(session)
 
 
-def test_workspace_creation_and_year_isolation(tax_service: TaxWorkspaceService) -> None:
+def _register(tax_service: TaxWorkspaceService, workspace_id: str, name: str, rev: str = "1"):  # type: ignore[no-untyped-def]
+    """Register a synthetic source document so evidence has a real parent.
+
+    Evidence must reference a document in the same workspace, so tests that
+    propose fields need an actual registered document rather than a made-up id.
+    """
+    pdf = (
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\n"
+        b"trailer<</Root 1 0 R>>\n"
+    ).replace(b"%PDF-1.4", b"%PDF-1.4 rev" + rev.encode())
+    return tax_service.register_document(workspace_id=workspace_id, file_name=name, source=pdf)
+
+
+def test_workspace_creation_and_year_isolation(
+    tax_service: TaxWorkspaceService, tax_env: Path
+) -> None:
     """Workspaces are strictly isolated by tax year and jurisdiction."""
     ws_2025 = tax_service.get_or_create_workspace(2025, Jurisdiction.FEDERAL)
     ws_2024 = tax_service.get_or_create_workspace(2024, Jurisdiction.FEDERAL)
@@ -60,9 +77,10 @@ def test_workspace_creation_and_year_isolation(tax_service: TaxWorkspaceService)
     assert ws_2025_again.id == ws_2025.id
 
     # Propose field in 2025
+    doc_2025 = _register(tax_service, ws_2025.id, "synthetic_2025.pdf")
     field_2025 = tax_service.propose_field(
         workspace_id=ws_2025.id,
-        document_id="doc-synthetic-2025",
+        document_id=doc_2025.id,
         field_name="box1a_dividends",
         raw_text="$500.00",
         amount_cents=50000,
@@ -114,14 +132,17 @@ def test_document_registration_and_integrity_check(
         tax_service.verify_document_on_disk(doc.id)
 
 
-def test_approval_invariant_strictness(tax_service: TaxWorkspaceService) -> None:
+def test_approval_invariant_strictness(
+    tax_service: TaxWorkspaceService, tax_env: Path
+) -> None:
     """Unverified, rejected, and superseded values NEVER enter approved totals."""
     ws = tax_service.get_or_create_workspace(2025)
+    doc = _register(tax_service, ws.id, "synthetic.pdf")
 
     # 1. Propose three fields
-    f1 = tax_service.propose_field(ws.id, "doc-1", "interest_income", "$100.00", 10000)
-    f2 = tax_service.propose_field(ws.id, "doc-1", "dividend_income", "$250.00", 25000)
-    f3 = tax_service.propose_field(ws.id, "doc-1", "tax_exempt_interest", "$50.00", 5000)
+    f1 = tax_service.propose_field(ws.id, doc.id, "interest_income", "$100.00", 10000)
+    f2 = tax_service.propose_field(ws.id, doc.id, "dividend_income", "$250.00", 25000)
+    f3 = tax_service.propose_field(ws.id, doc.id, "tax_exempt_interest", "$50.00", 5000)
 
     # When all are PROPOSED, verified total must be 0
     assert tax_service.compute_verified_totals(ws.id) == 0
@@ -269,13 +290,16 @@ def test_rental_property_and_depreciation(tax_service: TaxWorkspaceService) -> N
     assert summary == {"Advertising": 12000}
 
 
-def test_investment_sale_records(tax_service: TaxWorkspaceService) -> None:
+def test_investment_sale_records(
+    tax_service: TaxWorkspaceService, tax_env: Path
+) -> None:
     """Investment sales correctly separate short-term from long-term verified gains."""
     ws = tax_service.get_or_create_workspace(2025)
+    brokerage_doc = _register(tax_service, ws.id, "brokerage.pdf")
 
     sale_st = tax_service.record_investment_sale(
         workspace_id=ws.id,
-        source_document_id="doc-brokerage",
+        source_document_id=brokerage_doc.id,
         security_description="AAPL",
         date_sold="2025-06-15",
         proceeds_cents=500000,
@@ -286,7 +310,7 @@ def test_investment_sale_records(tax_service: TaxWorkspaceService) -> None:
     )
     sale_lt = tax_service.record_investment_sale(
         workspace_id=ws.id,
-        source_document_id="doc-brokerage",
+        source_document_id=brokerage_doc.id,
         security_description="MSFT",
         date_sold="2025-08-20",
         proceeds_cents=1200000,
@@ -299,7 +323,7 @@ def test_investment_sale_records(tax_service: TaxWorkspaceService) -> None:
     # Record a sale with missing/undetermined basis (noncovered security)
     sale_missing = tax_service.record_investment_sale(
         workspace_id=ws.id,
-        source_document_id="doc-brokerage",
+        source_document_id=brokerage_doc.id,
         security_description="CRYPTO_TOKEN",
         date_sold="2025-09-10",
         proceeds_cents=300000,

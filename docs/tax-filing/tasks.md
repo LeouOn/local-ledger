@@ -14,12 +14,12 @@ L = cross-component feature. They are not elapsed-time commitments.
 | TAX-01 | Repair import integrity and review | P0 | L | **COMPLETE** (agent A) | None |
 | TAX-02 | Make local runtime and evaluation harness reproducible | P0 | M | **COMPLETED** (agent B) | None |
 | TAX-03 | Define tax workspace contract and supported scope | P0 | S | **COMPLETED** (agent B) | None |
-| TAX-04 | Persist tax workspace and evidence lifecycle | P0 | L | **IN PROGRESS** (agent B) | TAX-03 |
+| TAX-04 | Persist tax workspace and evidence lifecycle | P0 | L | **HARDENED** (agent B, then review fixes) | TAX-03 |
 | TAX-05 | Build document intake and manual verification UI | P1 | L | Not started | TAX-04 |
-| TAX-06 | Build annual reconciliation and tax classification service | P1 | L | Not started | TAX-01, TAX-04 |
+| TAX-06 | Build annual reconciliation and tax classification service | P1 | L | **COMPLETE** (2026-09-29) | TAX-01, TAX-04 |
 | TAX-07 | Add local extraction proposals with citations | P1 | L | Not started | TAX-02, TAX-05 |
 | TAX-08 | Build TaxAct input comparison and evidence packet | P1 | L | Not started | TAX-05, TAX-06, TAX-13, TAX-14, TAX-15 |
-| TAX-09 | Add tax workspace backup and restore | P1 | M | Not started | TAX-04 |
+| TAX-09 | Add tax workspace backup and restore | P1 | M | **COMPLETED** (agent D, 2026-09-29) | TAX-04 |
 | TAX-10 | Qualify local models on synthetic tax documents | P1 | M | Not started | TAX-07 |
 | TAX-11 | Validate complete preparation journeys and document handoff | P1 | M | Not started | TAX-08, TAX-09 |
 | TAX-12 | Add evidence-grounded local tax Q&A | P2 | M | Not started | TAX-08, TAX-10, TAX-11 |
@@ -160,14 +160,43 @@ approved totals. Money conversion is exact and records the original text.
 Private paths and raw values do not leak into ordinary error logs. Storage
 location and retention behavior are documented.
 
-**Status: completed (agent B, completed 2026-09-28).** All 11 SQLModel domain models
-implemented in `src/local_ledger/tax/models.py` and registered in `src/local_ledger/models.py`.
-Alembic migration `f6a8b2c4d305_add_tax_workspace_and_evidence_tables.py` rebased cleanly on
-top of Agent A's `e5f7a1c9d204`. Private document storage and PII/path masking implemented in
-`src/local_ledger/tax/storage.py`. `TaxWorkspaceService` implemented in `src/local_ledger/tax/service.py`
-enforcing the approval invariant, year isolation, supersession cascades, and transaction edit invalidation.
-Migration and unit test suites passing (26 tax/migration tests, 400 total unit tests).
-Full details in [TAX-04 work log](tax-04-work-log.md).
+**Status: implemented, then hardened (agent B, 2026-09-28; hardening after review).**
+All 11 SQLModel domain models implemented in `src/local_ledger/tax/models.py` and registered
+in `src/local_ledger/models.py`. Alembic migration
+`f6a8b2c4d305_add_tax_workspace_and_evidence_tables.py` rebased cleanly on top of Agent A's
+`e5f7a1c9d204`. Private document storage and PII/path masking in `src/local_ledger/tax/storage.py`.
+
+A review on 2026-09-28 found four correctness gaps, all now fixed with regression
+tests in `tests/unit/tax/test_tax_hardening.py`:
+
+1. **Evidence could cross tax years.** A field in one workspace could reference
+   another workspace's document and reach its verified totals, and a correction
+   could rewrite that other workspace's field. Evidence now requires a document in
+   the same workspace, a correction may only supersede within its own workspace,
+   and no field can be proposed from an already-superseded document
+   (`WorkspaceScopeError`).
+2. **Superseded or rejected evidence could be reapproved**, putting a replaced
+   amount back into an approved total. `PROPOSED` is now the only reviewable
+   state on fields, rental expenses and investment sales
+   (`InvalidStateTransitionError`); re-proposing is the way back.
+3. **Real ledger deletion left tax comparisons marked matched.** The invalidation
+   helper existed but no ledger mutation called it. `delete_transaction` now
+   notifies the tax domain inside the same transaction via
+   `ledger/invalidation.py`, so a deleted transaction and its stale marking land
+   together.
+4. **A non-draft packet could be created with open questions.** A final packet is
+   refused while any question is open (`PacketReadinessError`); drafts stay
+   available and labelled.
+
+Two further defects found while fixing the above: a "correction" re-sending
+identical bytes to the document it claimed to replace was silently dropped by the
+duplicate-hash guard, and residency/filing status defaulted to unconfirmed values
+(`FULL_YEAR` / `SINGLE`). Both now default to `UNKNOWN`. The enum change needs no
+migration: the columns are Python-side defaults with no server default, so
+existing rows keep whatever was actually recorded.
+
+Unit suite at hand-off: **420 passed, 10 skipped**. Full detail in the
+[TAX-04 work log](tax-04-work-log.md) and the hardening test module.
 
 ## TAX-05 — Build document intake and manual verification UI
 
@@ -203,6 +232,14 @@ form mapping is limited to the scope selected in TAX-03.
 boundaries, duplicate/corrected documents and unresolved items. Totals are exact,
 reproducible and traceable. Unresolved values appear separately; a ledger edit
 invalidates affected approvals/snapshots. No model is called for arithmetic.
+
+**Status: complete (2026-09-29).** `tax/classification.py` holds the registered
+treatment vocabulary plus the fact and authority behind each treatment;
+`tax/reconciliation.py` holds exact, reproducible, traceable totals per basis
+(source-form vs bank-flow) and persisted runs whose content hash covers the
+totals *and their member ids*. 29 tests; unit suite 449 passed, 10 skipped.
+Full detail, including one out-of-scope schema addition the coordinator may want
+to revisit, in the [TAX-06 work log](tax-06-work-log.md).
 
 ## TAX-07 — Add local extraction proposals with citations
 
@@ -260,6 +297,24 @@ validate schema/version and hashes, and fail clearly on incomplete backups.
 verified values, questions and totals. Test WAL-active backup, corrupt/missing
 files and incompatible versions. Restore cannot overwrite a live workspace
 silently, and neither source data nor backup output lands in tracked paths.
+
+**Status: complete (agent D, 2026-09-29).** Implemented in new files only
+(`src/local_ledger/tax/backup.py`, `tests/unit/tax/test_tax_backup.py`) to
+avoid colliding with TAX-06's concurrent in-tree work; the optional settings
+section was deferred to a serialized UI pass and the CLI delivered instead.
+Whole-DB consistent snapshot via SQLite's online backup API (WAL-safe) plus
+re-hashed document originals and a manifest written last; restore is
+fresh-target-only, validates format/alembic version and every hash before
+writing, rewrites `storage_path` to the restored store, cross-checks restored
+totals/questions against the manifest and removes its own partial output on
+failure. At-rest protection is permissions only (0o700/0o600/0o400) and the
+manifest records that assumption. All acceptance criteria have a
+corresponding test (12 tests, including WAL-active, corrupt/missing files,
+incompatible versions, live-target refusal and tracked-path refusal); a
+subprocess CLI smoke ran against a database migrated through the full alembic
+chain with synthetic documents. Unit suite at hand-off: **461 passed, 10
+skipped**. Details and evidence mapping in the
+[TAX-09 work log](tax-09-work-log.md).
 
 ## TAX-10 — Qualify local models on synthetic tax documents
 

@@ -82,12 +82,18 @@ class Jurisdiction(StrEnum):
 
 
 class ResidencyStatus(StrEnum):
+    """Residency is a fact the user must confirm; UNKNOWN is the honest default."""
+
+    UNKNOWN = "UNKNOWN"
     FULL_YEAR = "FULL_YEAR"
     PART_YEAR = "PART_YEAR"
     NON_RESIDENT = "NON_RESIDENT"
 
 
 class FilingStatus(StrEnum):
+    """Filing status is a fact the user must confirm; UNKNOWN is the honest default."""
+
+    UNKNOWN = "UNKNOWN"
     SINGLE = "SINGLE"
     MARRIED_FILING_JOINTLY = "MARRIED_FILING_JOINTLY"
     MARRIED_FILING_SEPARATELY = "MARRIED_FILING_SEPARATELY"
@@ -111,7 +117,12 @@ class ScanState(StrEnum):
 
 
 class TaxWorkspace(SQLModel, table=True):
-    """Annual tax preparation review workspace."""
+    """Annual tax preparation review workspace.
+
+    ``residency_status`` and ``filing_status`` default to UNKNOWN, not to a
+    specific answer: neither fact has been confirmed, and a default that reads
+    as a fact is how a wrong assumption reaches a return.
+    """
 
     model_config = ConfigDict(validate_assignment=True)
     __table_args__ = (
@@ -121,8 +132,8 @@ class TaxWorkspace(SQLModel, table=True):
     id: str = Field(default_factory=lambda: f"ws-{uuid.uuid4().hex[:12]}", primary_key=True)
     tax_year: int = Field(index=True)
     jurisdiction: str = Field(default=Jurisdiction.FEDERAL, index=True)
-    residency_status: str = Field(default=ResidencyStatus.FULL_YEAR)
-    filing_status: str = Field(default=FilingStatus.SINGLE)
+    residency_status: str = Field(default=ResidencyStatus.UNKNOWN)
+    filing_status: str = Field(default=FilingStatus.UNKNOWN)
     status: str = Field(default=WorkspaceStatus.DRAFT, index=True)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
