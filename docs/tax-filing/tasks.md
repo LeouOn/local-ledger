@@ -15,7 +15,7 @@ L = cross-component feature. They are not elapsed-time commitments.
 | TAX-02 | Make local runtime and evaluation harness reproducible | P0 | M | **COMPLETED** (agent B) | None |
 | TAX-03 | Define tax workspace contract and supported scope | P0 | S | **COMPLETED** (agent B) | None |
 | TAX-04 | Persist tax workspace and evidence lifecycle | P0 | L | **HARDENED** (agent B, then review fixes) | TAX-03 |
-| TAX-05 | Build document intake and manual verification UI | P1 | L | Not started | TAX-04 |
+| TAX-05 | Build document intake and manual verification UI | P1 | L | **COMPLETE** (2026-09-29) | TAX-04 |
 | TAX-06 | Build annual reconciliation and tax classification service | P1 | L | **COMPLETE** (2026-09-29) | TAX-01, TAX-04 |
 | TAX-07 | Add local extraction proposals with citations | P1 | L | Not started | TAX-02, TAX-05 |
 | TAX-08 | Build TaxAct input comparison and evidence packet | P1 | L | Not started | TAX-05, TAX-06, TAX-13, TAX-14, TAX-15 |
@@ -215,6 +215,16 @@ documentation and licenses at implementation time.
 duplicate upload does not create duplicate approved amounts; manual fields can
 be verified against a visible source. Missing documents and unsupported types
 remain visible. Parsing failures leave no half-registered approved records.
+
+**Status: complete (2026-09-29).** `tax/intake.py` provides 2025 expected/missing
+inventory tracking, safe local upload with 25MB and format limits, content-addressable
+SHA-256 deduplication, hermetic text PDF stream extraction, scanned document
+detection (`scanned_no_text`), manual field proposals with exact cents, and reviewer
+verification (`VERIFY`/`REJECT`) enforcing the approval invariant. `app_pages/tax_intake.py`
+renders the complete intake, document inspector, verification queue, and manual entry UI.
+8 intake unit tests in `tests/unit/tax/test_tax_intake.py` and UI smoke test in
+`tests/unit/test_ui_smoke.py`. Full detail in the [TAX-05 work log](tax-05-work-log.md).
+
 
 ## TAX-06 — Build annual reconciliation and tax classification service
 

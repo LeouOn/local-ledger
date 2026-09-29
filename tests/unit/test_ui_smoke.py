@@ -43,3 +43,8 @@ def test_insights_page_renders(apptest) -> None:  # type: ignore[no-untyped-def]
 
 def test_settings_page_renders(apptest) -> None:  # type: ignore[no-untyped-def]
     apptest("app_pages/settings.py")
+
+
+def test_tax_intake_page_renders(apptest) -> None:  # type: ignore[no-untyped-def]
+    apptest("app_pages/tax_intake.py")
+

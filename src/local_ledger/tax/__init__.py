@@ -2,6 +2,24 @@
 
 from __future__ import annotations
 
+from local_ledger.tax.intake import (
+    EXPECTED_2025_CATEGORIES,
+    DocumentParsingError,
+    EmptyFileError,
+    ExpectedDocCategory,
+    FileOversizedError,
+    IntakeError,
+    IntakeUploadResult,
+    InventoryStatus,
+    UnsupportedFileTypeError,
+    add_manual_field,
+    get_inventory_status,
+    get_workspace_fields_summary,
+    ingest_document,
+    inspect_file_content,
+    review_field,
+    validate_file_upload,
+)
 from local_ledger.tax.models import (
     AssetDepreciation,
     DocumentType,
@@ -43,17 +61,26 @@ from local_ledger.tax.storage import (
 )
 
 __all__ = [
+    # Intake exports (TAX-05)
+    "EXPECTED_2025_CATEGORIES",
     "AssetDepreciation",
     "DocumentIntegrityError",
     "DocumentNotFoundError",
+    "DocumentParsingError",
     "DocumentType",
     "DuplicateDocumentError",
+    "EmptyFileError",
     "EntityNotFoundError",
     "EvidencePacket",
     "EvidenceStatus",
+    "ExpectedDocCategory",
     "ExtractedField",
+    "FileOversizedError",
     "FilingStatus",
     "HoldingTerm",
+    "IntakeError",
+    "IntakeUploadResult",
+    "InventoryStatus",
     "InvestmentSaleRecord",
     "Jurisdiction",
     "JurisdictionCarryover",
@@ -69,11 +96,19 @@ __all__ = [
     "TaxStorageError",
     "TaxWorkspace",
     "TaxWorkspaceService",
+    "UnsupportedFileTypeError",
     "WorkspaceLockedError",
     "WorkspaceNotFoundError",
     "WorkspaceStatus",
+    "add_manual_field",
     "compute_sha256",
+    "get_inventory_status",
     "get_tax_storage_dir",
+    "get_workspace_fields_summary",
+    "ingest_document",
+    "inspect_file_content",
     "mask_pii",
+    "review_field",
     "sanitize_path",
+    "validate_file_upload",
 ]
