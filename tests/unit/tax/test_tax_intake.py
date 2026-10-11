@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from sqlmodel import Session, select
+from tests.unit.tax import pdf_fixtures
 
 from local_ledger.db import init_db
 from local_ledger.tax import (
@@ -37,26 +38,14 @@ from local_ledger.tax import (
     validate_file_upload,
 )
 
-# Structurally valid single-page PDF with embedded text layer
-_TEXT_PDF = (
-    b"%PDF-1.4\n"
-    b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
-    b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
-    b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]"
-    b"/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n"
-    b"4 0 obj<</Length 50>>stream\n"
-    b"BT /F1 12 Tf 20 100 Td (CONSOLIDATED 1099 DIVIDENDS 1250) Tj ET\nendstream endobj\n"
-    b"trailer<</Root 1 0 R>>\n"
-)
+# Real, structurally valid single-page PDFs. These were previously hand-written
+# byte strings with no cross-reference table and a font object that was referenced
+# but never defined; a regex parser never noticed because it never built a page
+# tree, but a real reader rejects them - and it should.
+_TEXT_PDF = pdf_fixtures.text_pdf(["CONSOLIDATED 1099 DIVIDENDS 1250"])
 
-# Structurally valid PDF without text layer (representing scanned PDF)
-_SCANNED_PDF = (
-    b"%PDF-1.4\n"
-    b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
-    b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
-    b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\n"
-    b"trailer<</Root 1 0 R>>\n"
-)
+# A valid PDF whose page carries drawn content but no text layer (a scan).
+_SCANNED_PDF = pdf_fixtures.image_only_pdf(page_count=1)
 
 
 @pytest.fixture()
@@ -228,7 +217,10 @@ def test_text_pdf_vs_scanned_pdf_inspection() -> None:
     scan_state_scanned, pages_scanned, scanned_dict = inspect_file_content(_SCANNED_PDF, "scan.pdf")
     assert scan_state_scanned == ScanState.SCANNED_NO_TEXT
     assert pages_scanned == 1
-    assert "no embedded text layer detected" in scanned_dict[1]
+    # Wording changed with pypdf-backed extraction; the substance is the same and
+    # more precise: this page has no extractable text, and OCR is not attempted.
+    assert "no extractable text" in scanned_dict[1]
+    assert "manually" in scanned_dict[1]
 
     # Image file
     scan_state_img, _, img_dict = inspect_file_content(b"PNGFAKEBYTES", "receipt.png")

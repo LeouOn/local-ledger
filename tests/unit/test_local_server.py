@@ -269,7 +269,7 @@ def test_endpoint_serving_different_model_is_never_replaced(tmp_path: Path) -> N
 
 
 def test_profiles_cover_ollama_ds4_glm() -> None:
-    assert set(PROFILES) == {"ollama", "ds4", "glm"}
+    assert set(PROFILES) == {"ollama", "ds4", "glm", "glmo"}
     assert PROFILES["ds4"].model == "deepseek-v4-flash"
     # The GLM engine is LISTED as glm-5.2 by the server; health checks must
     # use the listed id even though request aliases exist.
@@ -289,6 +289,19 @@ def test_profiles_cover_ollama_ds4_glm() -> None:
         "--kv-disk-space-mb",
         "8192",
     )
+
+
+def test_official_glm_launcher_discovery_and_default_mode(monkeypatch) -> None:
+    from local_ledger.llm.local_server import resolve_launcher
+
+    monkeypatch.delenv("LOCAL_LEDGER_DS4_HOME", raising=False)
+    monkeypatch.delenv("DS4_HOME", raising=False)
+    profile = PROFILES["glmo"]
+    expected = str(Path.home() / "ds4" / "run-glm-official.sh")
+    assert resolve_launcher(profile, which=lambda path: path if path == expected else None) == expected
+    assert len(profile.launch) == 1
+    assert profile.model == "glm-5.3-flash-chat"
+    assert profile.base_url == PROFILES["ds4"].base_url
 
 
 def test_profile_from_settings_falls_back_to_ollama() -> None:
@@ -451,4 +464,3 @@ def test_manager_respects_injected_which(tmp_path: Path) -> None:
     assert len(spawn.calls) == 1
     assert spawn.calls[0][0][0] == "/injected/bin/run-ds4f.sh"
     assert len(custom_calls) > 0
-

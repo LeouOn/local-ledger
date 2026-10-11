@@ -64,6 +64,13 @@ streamlit run app.py
 
 Then open the printed `http://localhost:8501` URL.
 
+### Tax document pilot
+
+For 2025 federal/California review, use the
+[local tax pilot guide](docs/tax-filing/local-pilot-guide.md). It explains isolated
+storage, local model settings, document proposals and verification, working-paper
+views, TaxAct comparisons and current limits. TaxAct computes and files the return.
+
 ### First-run guide
 
 1. **Budgets page** → create your first account (e.g. "Checking") and a few
@@ -164,7 +171,8 @@ alembic revision --autogenerate -m "describe change"
 ## Scope boundaries
 
 Not included: bank aggregation/Plaid/sync, multi-user or hosting, double-entry
-accounting, investments, multi-currency, PDF/XLS import, or sending anything but
-aggregates to the cloud.
+accounting, multi-currency, XLS import, or sending raw tax documents to the cloud.
+Tax PDFs and investment/rental input auditing are available through the tax pilot;
+this does not implement a tax calculation engine or electronic filing.
 
 The full design and decision trail lives in `.omo/plans/local-ledger.md`.

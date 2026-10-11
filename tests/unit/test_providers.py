@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
-from openai import OpenAI
+from openai import APIStatusError, DefaultHttpxClient, OpenAI
 from sqlmodel import Session
 
 from local_ledger.db import init_db
@@ -39,6 +41,47 @@ def test_get_local_client_returns_openai_when_ready(settings: ProviderSettings) 
     client = providers.get_local_client(settings, state_detector=_detector(OllamaState.READY))
     assert isinstance(client, OpenAI)
     assert str(client.base_url).rstrip("/").endswith("v1")
+
+
+@pytest.mark.parametrize("redirect", [False, True])
+def test_local_requests_ignore_environment_proxies_and_refuse_redirects(
+    settings: ProviderSettings, monkeypatch: pytest.MonkeyPatch, redirect: bool,
+) -> None:
+    """Exercise the real HTTP routing with fake transports and synthetic data."""
+    # The installed SDK can use httpx or httpx2; test its actual HTTP client.
+    http = importlib.import_module(DefaultHttpxClient.__mro__[1].__module__.split(".")[0])
+    client_module = importlib.import_module(f"{http.__name__}._client")
+    calls = []
+
+    def transport_factory(*args, proxy=None, **kwargs):  # type: ignore[no-untyped-def]
+        def respond(request):  # type: ignore[no-untyped-def]
+            calls.append((str(request.url), proxy))
+            if redirect:
+                return http.Response(307, headers={"Location": "https://external.invalid/collect"})
+            return http.Response(200, json={
+                "id": "synthetic", "object": "chat.completion", "created": 0,
+                "model": "test", "choices": [],
+            })
+        return http.MockTransport(respond)
+
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.setenv(name, "http://external-proxy.invalid:8080")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setattr(client_module, "HTTPTransport", transport_factory)
+    with providers.get_local_client(
+        settings, state_detector=_detector(OllamaState.READY),
+    ) as client:
+        def request():  # type: ignore[no-untyped-def]
+            return client.chat.completions.create(
+                model="test", messages=[{"role": "user", "content": "synthetic document text"}],
+            )
+        if redirect:
+            with pytest.raises(APIStatusError) as exc:
+                request()
+            assert exc.value.status_code == 307
+        else:
+            request()
+    assert calls == [("http://localhost:11434/v1/chat/completions", None)]
 
 
 def test_local_client_refuses_non_loopback_url(session: Session) -> None:

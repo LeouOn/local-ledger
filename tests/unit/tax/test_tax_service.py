@@ -29,6 +29,7 @@ from local_ledger.tax import (
     mask_pii,
     sanitize_path,
 )
+from local_ledger.tax.scope import ReviewScopeMode, WorkspaceScopeService
 
 
 @pytest.fixture()
@@ -173,6 +174,9 @@ def test_correction_supersession_invalidates_downstream(
 ) -> None:
     """Registering a corrected document marks prior fields SUPERSEDED and downstreams STALE."""
     ws = tax_service.get_or_create_workspace(2025)
+    WorkspaceScopeService(tax_service.session).configure(
+        workspace_id=ws.id, mode=ReviewScopeMode.DOCUMENTS_ONLY, properties_confirmed=True,
+    )
 
     # Register original 1099
     doc_v1 = tax_service.register_document(
@@ -229,6 +233,9 @@ def test_correction_supersession_invalidates_downstream(
 def test_ledger_transaction_edit_invalidation(tax_service: TaxWorkspaceService) -> None:
     """Editing a consumed ledger transaction marks affected reconciliation items STALE."""
     ws = tax_service.get_or_create_workspace(2025)
+    WorkspaceScopeService(tax_service.session).configure(
+        workspace_id=ws.id, mode=ReviewScopeMode.DOCUMENTS_ONLY, properties_confirmed=True,
+    )
 
     rec = tax_service.record_reconciliation_item(
         workspace_id=ws.id,

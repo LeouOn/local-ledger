@@ -4,9 +4,9 @@ Contract:
 - The configured endpoint is probed first; a healthy server serving the
   selected model is adopted as-is — never stopped or replaced, even when it
   was started outside the app.
-- GLM and DS4 are explicit profiles over the DwarfStar engine, launched
+- Official GLM, uncensored GLM and DS4 are explicit profiles over the DwarfStar engine, launched
   through the project's own wrapper scripts (``run-ds4f.sh server`` /
-  ``run-glm.sh server``) so streaming, expert-cache, MTP, and memory-guard
+  ``run-glm.sh server`` / ``run-glm-official.sh``) so streaming, expert-cache, MTP, and memory-guard
   settings always match the working configurations. Ollama remains the
   default profile.
 - Health checks and readiness polling use the *effective* endpoint and model
@@ -115,6 +115,16 @@ PROFILES: dict[str, LocalProfile] = {
         ),
         model_overrides_ok=False,
     ),
+    "glmo": LocalProfile(
+        key="glmo",
+        label="DwarfStar (GLM 5.3 Flash official)",
+        base_url=f"http://127.0.0.1:{DS4_PORT}/v1",
+        model="glm-5.3-flash-chat",
+        # Default mode is server. The installed wrapper forwards its mode
+        # argument to the engine, so passing "server" makes it exit with usage.
+        launch=(f"{DS4_HOME}/run-glm-official.sh",),
+        model_overrides_ok=False,
+    ),
 }
 
 DEFAULT_PROFILE_KEY = "ollama"
@@ -141,7 +151,7 @@ def resolve_launcher(
     Resolves via:
     1. Direct executable path via `which(argv0)`.
     2. PATH lookup of executable basename (e.g. `run-ds4f.sh` on PATH).
-    3. Configured/discoverable DS4 directories from `LOCAL_LEDGER_DS4_HOME` / `DS4_HOME` / `~/Projects/ds4`.
+    3. Configured DS4 directories, then `~/Projects/ds4` and `~/ds4`.
     """
     raw_argv0 = profile.launch[0]
     argv0 = os.path.expanduser(raw_argv0)
@@ -153,7 +163,9 @@ def resolve_launcher(
 
     # For DwarfStar scripts (or commands configured without absolute paths), allow
     # PATH discovery or candidate home overrides.
-    if profile.key in ("ds4", "glm") or name in ("run-ds4f.sh", "run-glm.sh"):
+    if profile.key in ("ds4", "glm", "glmo") or name in (
+        "run-ds4f.sh", "run-glm.sh", "run-glm-official.sh"
+    ):
         found = which(name)
         if found:
             return found
@@ -161,6 +173,7 @@ def resolve_launcher(
             os.environ.get("LOCAL_LEDGER_DS4_HOME"),
             os.environ.get("DS4_HOME"),
             "~/Projects/ds4",
+            "~/ds4",
         ]
         for home in candidate_homes:
             if not home:

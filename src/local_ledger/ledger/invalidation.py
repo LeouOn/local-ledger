@@ -1,66 +1,55 @@
-"""Cross-domain invalidation hooks for ledger mutations.
-
-The ledger is the substrate that tax evidence is built on, so deleting or
-amending a transaction has to reach the tax comparison that consumed it. The
-dependency is resolved lazily and in one place, so:
-
-- the ledger does not import the tax domain at module load (no import cycle, and
-  a budget-only install still works);
-- there is exactly one function to find when adding a new mutation path.
-
-Adding a new ledger mutation? Call :func:`notify_transactions_changed` from it.
-Forgetting is the failure mode this module exists to prevent: an unused
-invalidation helper passes its own unit test while real deletions leave tax
-comparisons marked "matched" - which is exactly what happened before this module
-existed.
-"""
+"""Invalidate tax snapshots in the ledger mutation's own transaction."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
+from sqlmodel import Session, select
 
-def notify_transactions_changed(session: object, transaction_ids: Iterable[int]) -> None:
-    """Tell the tax domain that ledger rows changed.
 
-    The session is passed explicitly rather than discovered, so the invalidation
-    lands in the caller's transaction instead of a second one, and so the call
-    site is readable.
+def notify_transactions_changed(
+    session: Session,
+    transaction_ids: Iterable[int],
+    *,
+    prior_account_years: Iterable[tuple[int, int]] = (),
+) -> None:
+    """Cover creates, imports, edits and deletions, including previously empty runs.
 
-    Best effort by design: if the tax domain is not importable there is nothing
-    to invalidate, and a budget deletion must not fail because of it. That case
-    is reported, not swallowed.
+    Editors that move an account/date must pass the old account/year as well.
+    Read deletion coordinates before autoflush can remove the source rows.
+    Invalidation never commits independently of the ledger change.
     """
     ids = [i for i in transaction_ids if i is not None]
     if not ids:
         return
-    try:
-        from local_ledger.tax.service import TaxWorkspaceService
-    except ImportError:  # pragma: no cover - tax domain not installed
-        return
+    from local_ledger.models import Transaction
+    from local_ledger.tax.classification import ClassificationSubject, DecisionHead
+    from local_ledger.tax.models import RentalExpenseRecord, TaxWorkspace
+    from local_ledger.tax.scope import ReviewScope
+    from local_ledger.tax.service import TaxWorkspaceService
 
+    with session.no_autoflush:
+        rows = session.exec(select(Transaction).where(Transaction.id.in_(ids))).all()
+        coordinates = set(prior_account_years)
+        coordinates.update((r.account_id, int(r.date[:4])) for r in rows)
+        workspaces = {w.id: w for w in session.exec(select(TaxWorkspace)).all()}
+        affected = {
+            scope.workspace_id
+            for scope in session.exec(select(ReviewScope)).all()
+            if scope.workspace_id in workspaces and any(
+                scope.covers_account(account) and workspaces[scope.workspace_id].tax_year == year
+                for account, year in coordinates
+            )
+        }
+        affected.update(r.workspace_id for r in session.exec(
+            select(RentalExpenseRecord).where(RentalExpenseRecord.source_transaction_id.in_(ids))
+        ).all())
+        affected.update(h.workspace_id for h in session.exec(select(DecisionHead).where(
+            DecisionHead.subject_type == ClassificationSubject.TRANSACTION,
+            DecisionHead.subject_id.in_([str(i) for i in ids]),
+        )).all())
     service = TaxWorkspaceService(session)
     for tx_id in ids:
-        # commit=False: the caller owns the transaction. The deletion and the
-        # invalidation must land together or not at all.
         service.invalidate_for_transaction_edit(tx_id, commit=False)
-    _mark_reconciliation_runs_stale(session)
-
-
-def _mark_reconciliation_runs_stale(session: object) -> None:
-    """Stale the tax-year snapshots whose workspace touched a changed row.
-
-    A comparison can be marked stale while the total it was derived from is
-    still marked CURRENT; that is the inconsistency this closes.
-    """
-    from sqlmodel import select
-
-    try:
-        from local_ledger.tax.reconciliation import ReconciliationRun, RunState
-    except ImportError:  # pragma: no cover - tax domain not installed
-        return
-
-    stmt = select(ReconciliationRun).where(ReconciliationRun.state == RunState.CURRENT)
-    for run in session.exec(stmt).all():  # type: ignore[attr-defined]
-        run.state = RunState.STALE
-        session.add(run)  # type: ignore[attr-defined]
+    for workspace_id in affected:
+        service._invalidate_downstream(workspace_id)

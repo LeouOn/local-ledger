@@ -42,6 +42,7 @@ from local_ledger.tax.models import (
     TaxWorkspace,
     WorkspaceStatus,
 )
+from local_ledger.tax.reconciliation import ReconciliationRun, RunState
 from local_ledger.tax.storage import (
     DocumentNotFoundError,
     compute_sha256,
@@ -315,6 +316,7 @@ class TaxWorkspaceService:
 
         workspace.updated_at = _utcnow()
         self.session.add(workspace)
+        self._invalidate_downstream(workspace_id)
         self.session.commit()
         self.session.refresh(new_doc)
         return new_doc
@@ -365,7 +367,17 @@ class TaxWorkspaceService:
         self._invalidate_downstream(scope)
 
     def _invalidate_downstream(self, workspace_id: str) -> None:
-        """Mark all reconciliation items and evidence packets in workspace as STALE."""
+        """Mark every derived result of a workspace STALE, in one place.
+
+        Runs were the gap: a corrected document staled comparison items and
+        packets but left the persisted ``ReconciliationRun`` marked CURRENT, so a
+        stored report could keep claiming a total that no longer matched its
+        evidence.
+
+        This method adds and flushes but does **not** commit. The caller owns the
+        transaction, so the invalidation and the change that caused it land
+        together or not at all.
+        """
         recs_stmt = select(ReconciliationItem).where(
             ReconciliationItem.workspace_id == workspace_id,
             ReconciliationItem.status != ReconciliationStatus.STALE,
@@ -381,6 +393,50 @@ class TaxWorkspaceService:
         for pkt in self.session.exec(packets_stmt).all():
             pkt.is_stale = True
             self.session.add(pkt)
+
+        runs_stmt = select(ReconciliationRun).where(
+            ReconciliationRun.workspace_id == workspace_id,
+            ReconciliationRun.state == RunState.CURRENT,
+        )
+        for run in self.session.exec(runs_stmt).all():
+            run.state = RunState.STALE
+            self.session.add(run)
+
+        self.session.flush()
+
+    def invalidate_evidence(self, workspace_id: str, reason: str) -> int:
+        """Commit this workspace's derived results to STALE, recording why.
+
+        The public entry point for an evidence change that is not already inside
+        a transaction: scope changes and administrative corrections. Callers that
+        are mutating something should call ``_invalidate_downstream`` instead so
+        both changes commit together.
+        """
+        pending_items = self.session.exec(
+            select(ReconciliationItem).where(
+                ReconciliationItem.workspace_id == workspace_id,
+                ReconciliationItem.status != ReconciliationStatus.STALE,
+            )
+        ).all()
+        pending_runs = self.session.exec(
+            select(ReconciliationRun).where(
+                ReconciliationRun.workspace_id == workspace_id,
+                ReconciliationRun.state == RunState.CURRENT,
+            )
+        ).all()
+        self._invalidate_downstream(workspace_id)
+        self.session.add(
+            TaxQuestion(
+                workspace_id=workspace_id,
+                question_text=f"Results invalidated: {reason}",
+                context="evidence-change-invalidation",
+                status="ANSWERED",
+                resolution=reason,
+                resolved_at=_utcnow(),
+            )
+        )
+        self.session.commit()
+        return len(pending_items) + len(pending_runs)
 
     def get_document(self, document_id: str) -> TaxDocument | None:
         """Retrieve a document by ID."""
@@ -432,6 +488,7 @@ class TaxWorkspaceService:
             status=EvidenceStatus.PROPOSED,
         )
         self.session.add(field)
+        self._invalidate_downstream(field.workspace_id)
         self.session.commit()
         self.session.refresh(field)
         return field
@@ -563,6 +620,7 @@ class TaxWorkspaceService:
             date_placed_in_service=date_placed_in_service,
         )
         self.session.add(prop)
+        self._invalidate_downstream(prop.workspace_id)
         self.session.commit()
         self.session.refresh(prop)
         return prop
@@ -601,6 +659,7 @@ class TaxWorkspaceService:
             status=status,
         )
         self.session.add(record)
+        self._invalidate_downstream(record.workspace_id)
         self.session.commit()
         self.session.refresh(record)
         return record
@@ -697,6 +756,7 @@ class TaxWorkspaceService:
             status=status,
         )
         self.session.add(sale)
+        self._invalidate_downstream(sale.workspace_id)
         self.session.commit()
         self.session.refresh(sale)
         return sale
@@ -782,6 +842,7 @@ class TaxWorkspaceService:
             status="OPEN",
         )
         self.session.add(q)
+        self._invalidate_downstream(q.workspace_id)
         self.session.commit()
         self.session.refresh(q)
         return q
@@ -805,6 +866,7 @@ class TaxWorkspaceService:
         q.authority_citation = authority_citation
         q.resolved_at = _utcnow()
         self.session.add(q)
+        self._invalidate_downstream(q.workspace_id)
         self.session.commit()
         self.session.refresh(q)
         return q
@@ -839,7 +901,21 @@ class TaxWorkspaceService:
             authority_citation=authority_citation,
             consumed_transaction_ids_json=tx_json,
         )
+        # Retain older comparisons as stale history; this key has one current
+        # comparison, so re-review can clear a gap without deleting its evidence.
+        for previous in self.session.exec(select(ReconciliationItem).where(
+            ReconciliationItem.workspace_id == workspace_id,
+            ReconciliationItem.tax_section == tax_section,
+            ReconciliationItem.field_key == field_key,
+        )).all():
+            previous.status = ReconciliationStatus.STALE
+            self.session.add(previous)
         self.session.add(item)
+        for packet in self.session.exec(select(EvidencePacket).where(
+            EvidencePacket.workspace_id == workspace_id, EvidencePacket.is_stale == False,  # noqa: E712
+        )).all():
+            packet.is_stale = True
+            self.session.add(packet)
         self.session.commit()
         self.session.refresh(item)
         return item
@@ -881,13 +957,7 @@ class TaxWorkspaceService:
                 continue
 
         for ws_id in affected_workspaces:
-            packets_stmt = select(EvidencePacket).where(
-                EvidencePacket.workspace_id == ws_id,
-                EvidencePacket.is_stale == False,  # noqa: E712
-            )
-            for pkt in self.session.exec(packets_stmt).all():
-                pkt.is_stale = True
-                self.session.add(pkt)
+            self._invalidate_downstream(ws_id)
 
         if invalidated_count and commit:
             self.session.commit()
@@ -905,28 +975,23 @@ class TaxWorkspaceService:
     ) -> EvidencePacket:
         """Create an immutable evidence packet snapshot with content hash.
 
-        A packet is a claim about the state of the review, so a non-draft packet
-        is refused while any question is still open. A draft is always allowed
-        and always labelled a draft. This gate is what stops an unresolved
-        workspace being presented as reviewed.
+        Final designation requires configured scope, reviewed current evidence,
+        resolved questions and current matched comparisons. Readiness is recomputed
+        from sources and included in the hashed snapshot. Drafts retain gap reasons.
         """
         workspace = self._require_workspace(workspace_id)
 
-        if not is_draft:
-            open_questions = self.session.exec(
-                select(func.count())
-                .select_from(TaxQuestion)
-                .where(
-                    TaxQuestion.workspace_id == workspace_id,
-                    TaxQuestion.status == "OPEN",
-                )
-            ).one()
-            if open_questions:
-                raise PacketReadinessError(
-                    f"Cannot create a final evidence packet for year {workspace.tax_year} "
-                    f"({workspace.jurisdiction}): {open_questions} open question(s) remain. "
-                    "Resolve them, or export a draft."
-                )
+        from local_ledger.tax.classification import DecisionHead, TaxClassification
+        from local_ledger.tax.readiness import evaluate_readiness
+        from local_ledger.tax.scope import WorkspaceScopeService
+
+        readiness = evaluate_readiness(self.session, workspace_id)
+        if not is_draft and not readiness.ready:
+            raise PacketReadinessError(
+                f"Cannot create a final evidence packet for year {workspace.tax_year} "
+                f"({workspace.jurisdiction}): {'; '.join(readiness.reasons)}. "
+                "Resolve these gaps, or export a draft."
+            )
 
         # Gather state snapshot
         verified_fields_stmt = select(ExtractedField).where(
@@ -946,6 +1011,21 @@ class TaxWorkspaceService:
             "tax_year": workspace.tax_year,
             "jurisdiction": workspace.jurisdiction,
             "snapshot_at": _utcnow().isoformat(),
+            "scope": WorkspaceScopeService(self.session).get(workspace_id).to_snapshot(),
+            "readiness": readiness.to_snapshot(),
+            **{
+                name: [row.model_dump(mode="json") for row in self.session.exec(
+                    select(model).where(model.workspace_id == workspace_id).order_by(model.id)
+                ).all()]
+                for name, model in (
+                    ("classifications", TaxClassification),
+                    ("decision_heads", DecisionHead),
+                    ("properties", TaxProperty),
+                    ("rental_expenses", RentalExpenseRecord),
+                    ("investment_sales", InvestmentSaleRecord),
+                    ("comparisons", ReconciliationItem),
+                )
+            },
             "documents": [
                 {
                     "id": d.id,

@@ -192,7 +192,7 @@ class ProviderSettings(SQLModel, table=True):
     local_base_url: str = "http://localhost:11434/v1"
     local_model: str = "llama3.3:8b"
     local_profile: str = Field(
-        default="ollama", description="Selected local server profile: ollama | ds4 | glm"
+        default="ollama", description="Selected local server profile: ollama | ds4 | glm | glmo"
     )
     local_autostart: bool = Field(
         default=False, description="Start the selected local server when none is healthy"
@@ -332,6 +332,8 @@ class Rule(SQLModel, table=True):
 from local_ledger.tax.classification import (  # noqa: E402,F401
     ClassificationState,
     ClassificationSubject,
+    DecisionHead,
+    Measure,
     TaxClassification,
 )
 from local_ledger.tax.models import (  # noqa: E402,F401
@@ -361,3 +363,4 @@ from local_ledger.tax.reconciliation import (  # noqa: E402,F401
     RunState,
     TotalBasis,
 )
+from local_ledger.tax.scope import ReviewScope, ReviewScopeMode  # noqa: E402,F401

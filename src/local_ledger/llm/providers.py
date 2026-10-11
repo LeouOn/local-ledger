@@ -14,7 +14,7 @@ import os
 import urllib.parse
 from collections.abc import Callable
 
-from openai import OpenAI
+from openai import DefaultHttpxClient, OpenAI
 from sqlmodel import Session
 
 from local_ledger.llm.ollama import (
@@ -94,7 +94,11 @@ def get_local_client(
     state_detector: Callable[..., OllamaState] = detect_state,
 ) -> OpenAI:
     require_local_ready(settings, state_detector=state_detector)
-    return OpenAI(base_url=settings.local_base_url, api_key="ollama")
+    return OpenAI(
+        base_url=settings.local_base_url,
+        api_key="ollama",
+        http_client=DefaultHttpxClient(trust_env=False, follow_redirects=False),
+    )
 
 
 def require_local_ready(

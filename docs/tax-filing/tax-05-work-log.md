@@ -67,3 +67,75 @@ Acceptance criteria are in [tasks.md](tasks.md#tax-05--build-document-intake-and
 - [x] **Parsing failures leave no half-registered approved records:** Ingestion validates before committing; validation errors rollback and return clean error messages.
 - [x] **Zero cloud egress:** All document handling and text extraction execute locally.
 - [x] **Strict money invariants:** All monetary values stored and computed strictly as integer cents.
+
+---
+
+# Extraction hardening — September 29, 2026
+
+The intake implementation was completed with a hand-rolled PDF inspector: page
+count from a `/Type /Page` regex, content streams matched with
+`stream…endstream`, and text pulled from `Tj`/`TJ` operators and decoded as
+latin-1. It worked on the fixtures it was written against and was wrong on real
+documents, in a way that produced **silently incorrect evidence**:
+
+- **Page attribution was positional.** `pages_dict[idx + 1] = decompressed_streams[idx]`
+  assumes the Nth content stream in the file is page N. A document with a font
+  object, an image, or PDF 1.5+ object streams has more streams than pages, so
+  indices shift and later pages get the wrong text. Nothing indicates it.
+- **A page that yielded no text was filled with the whole document's text**
+  (`page_text = " ".join(page_tokens).strip() or total_text`). A reviewer
+  verifying a field "against page 3" could be shown page 1 with no indication
+  that the page shown was not the page cited.
+- **No font or encoding handling.** Real tax PDFs use subset fonts and
+  ToUnicode CMaps; byte-decoding as latin-1 mangles them. LZW and object streams
+  were unsupported, so real documents were often misreported as
+  `scanned_no_text`, demanding manual entry for every field.
+- **The test fixtures were not valid PDFs.** Both were labelled "structurally
+  valid" but had no cross-reference table, and the text fixture referenced a font
+  object that was never defined. The regex parser never noticed because it never
+  built a page tree. They are now real files from `tests/unit/tax/pdf_fixtures.py`.
+
+This is the same defect class as TAX-01 (import integrity) and the TAX-04
+review: a figure that looks right, is traceable, and is wrong.
+
+## What replaced it
+
+`src/local_ledger/tax/pdf_text.py` - pypdf (BSD-3-Clause, verified from the
+project's LICENSE), behind a `PageTextExtractor` protocol so pdfplumber can be
+substituted later for statement tables without touching callers. `intake.py`'s
+`extract_pdf_page_texts` keeps its signature and delegates.
+
+- Page text comes from the page tree, so page N is page N regardless of how the
+  file stores its objects.
+- `PageStatus` is **per page**: `EXTRACTED`, `NO_TEXT_LAYER`, `TRUNCATED`,
+  `TIMED_OUT`, `SKIPPED_AFTER_LIMIT`, `ERROR`. A mixed text/scan document reports
+  each page and is *not* called scanned; a page with no text says so on that page
+  and never shows another page's content.
+- Bounded: page count, per-page and total time, and a per-page character cap,
+  because a small compressed file can expand enormously on decompression.
+- Encrypted, malformed and corrupt documents return a **reason** and route to
+  manual entry. pypdf does not OCR, and that is stated in the message rather
+  than presented as an empty success.
+- `preview_for_page` sets `is_authoritative = False` unconditionally: extracted
+  text is a locating aid, and the stored original is what a reviewer verifies
+  against. Making that a field the caller cannot forget is the point.
+
+## Test evidence
+
+`pytest tests/unit -q` → **486 passed, 10 skipped** (was 470). 16 new tests in
+`tests/unit/tax/test_pdf_extraction.py`, using real synthetic PDFs: multi-page,
+uncompressed, extra streams, image-only, mixed, encrypted, corrupt, truncated,
+empty, over the page cap, and over the time budget.
+
+The two tests that pin the original defect were verified by reintroducing the old
+behaviour: restoring the whole-document fallback fails
+`test_a_page_with_no_text_never_shows_the_whole_document` and
+`test_a_mixed_document_is_not_reported_as_scanned`.
+
+## One thing to review
+
+`extract_pdf_page_texts` maps encrypted and malformed PDFs to the existing
+`UNSUPPORTED_TYPE` scan state, with the specific reason in the page text. I did
+not add an `ENCRYPTED` or `MALFORMED` value to `ScanState`, because that enum is
+the closed vocabulary downstream code switches on. If distinct states are wanted,
+that is a one-line change here and a review of whoever switches on it.

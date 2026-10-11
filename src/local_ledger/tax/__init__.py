@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+from local_ledger.tax.california import (
+    OFFICIAL_2025_CA_AUTHORITIES,
+    AdjustmentType,
+    CaliforniaTaxAuthority,
+    CaliforniaTaxService,
+    CarryoverComparison,
+    DepreciationDifference,
+    ResidencySourcingAnalysis,
+    ScheduleCAAdjustmentLine,
+    ScheduleCAAdjustmentReport,
+)
 from local_ledger.tax.intake import (
     EXPECTED_2025_CATEGORIES,
     DocumentParsingError,
@@ -63,7 +74,13 @@ from local_ledger.tax.storage import (
 __all__ = [
     # Intake exports (TAX-05)
     "EXPECTED_2025_CATEGORIES",
+    "OFFICIAL_2025_CA_AUTHORITIES",
+    "AdjustmentType",
     "AssetDepreciation",
+    "CaliforniaTaxAuthority",
+    "CaliforniaTaxService",
+    "CarryoverComparison",
+    "DepreciationDifference",
     "DocumentIntegrityError",
     "DocumentNotFoundError",
     "DocumentParsingError",
@@ -87,8 +104,11 @@ __all__ = [
     "ReconciliationItem",
     "ReconciliationStatus",
     "RentalExpenseRecord",
+    "ResidencySourcingAnalysis",
     "ResidencyStatus",
     "ScanState",
+    "ScheduleCAAdjustmentLine",
+    "ScheduleCAAdjustmentReport",
     "TaxDocument",
     "TaxProperty",
     "TaxQuestion",

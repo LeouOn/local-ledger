@@ -121,6 +121,7 @@ class LedgerService:
                 actor=actor,
                 after=tx,
             )
+            notify_transactions_changed(self.session, [tx.id])
             self.session.commit()
             return tx
 
@@ -169,6 +170,7 @@ class LedgerService:
                 actor=actor,
                 after=in_tx,
             )
+            notify_transactions_changed(self.session, [out_tx.id, in_tx.id])
             self.session.commit()
             return out_tx, in_tx
 
@@ -184,9 +186,11 @@ class LedgerService:
                 mirror = self.session.get(Transaction, tx.transferred_id)
                 if mirror is not None:
                     ids_to_delete.append(mirror.id)
+            prior_coordinates = []
             for tid in ids_to_delete:
                 victim = self.session.get(Transaction, tid)
                 if victim is not None:
+                    prior_coordinates.append((victim.account_id, int(victim.date[:4])))
                     audit.record(
                         self.session,
                         entity_type="transaction",
@@ -200,7 +204,7 @@ class LedgerService:
             # evidence that no longer exists. This must happen before the commit so
             # the invalidation and the deletion are atomic; without this call the
             # comparison stayed MATCHED after a real deletion.
-            notify_transactions_changed(self.session, ids_to_delete)
+            notify_transactions_changed(self.session, ids_to_delete, prior_account_years=prior_coordinates)
             self.session.commit()
 
         transaction_with_retry(_op)

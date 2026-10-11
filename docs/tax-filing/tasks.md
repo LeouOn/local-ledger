@@ -2,7 +2,7 @@
 
 Created September 28, 2026 from the [readiness assessment](readiness-2026-09-28.md).
 These are repository-local work items; no external issues have been created.
-All are open. Confirmed scope: 2025 federal/California investment and rental
+Statuses below track implementation and outstanding acceptance work. Confirmed scope: 2025 federal/California investment and rental
 income; audit and explain TaxAct inputs, with no tax-engine or filing rebuild. Dependencies mean merged prerequisites, not merely started work.
 Sizes are relative: S = narrow change, M = several related components,
 L = cross-component feature. They are not elapsed-time commitments.
@@ -16,16 +16,16 @@ L = cross-component feature. They are not elapsed-time commitments.
 | TAX-03 | Define tax workspace contract and supported scope | P0 | S | **COMPLETED** (agent B) | None |
 | TAX-04 | Persist tax workspace and evidence lifecycle | P0 | L | **HARDENED** (agent B, then review fixes) | TAX-03 |
 | TAX-05 | Build document intake and manual verification UI | P1 | L | **COMPLETE** (2026-09-29) | TAX-04 |
-| TAX-06 | Build annual reconciliation and tax classification service | P1 | L | **COMPLETE** (2026-09-29) | TAX-01, TAX-04 |
-| TAX-07 | Add local extraction proposals with citations | P1 | L | Not started | TAX-02, TAX-05 |
-| TAX-08 | Build TaxAct input comparison and evidence packet | P1 | L | Not started | TAX-05, TAX-06, TAX-13, TAX-14, TAX-15 |
+| TAX-06 | Build annual reconciliation and tax classification service | P0 | L | **INTEGRATION HARDENED; UI FOLLOW-UPS** (2026-09-29) | TAX-01, TAX-04 |
+| TAX-07 | Add local extraction proposals with citations | P1 | L | **COMPLETE** (agent F, 2026-10-01 — 14 hermetic tests, suite 634/10; see tax-07-work-log.md; intake-page button handed to coordinator as patch) | TAX-02, TAX-05 |
+| TAX-08 | Build TaxAct input comparison and evidence packet | P1 | L | **COMPLETED** (agent E, 2026-10-01) | TAX-05, TAX-06, TAX-13, TAX-14, TAX-15 |
 | TAX-09 | Add tax workspace backup and restore | P1 | M | **COMPLETED** (agent D, 2026-09-29) | TAX-04 |
 | TAX-10 | Qualify local models on synthetic tax documents | P1 | M | Not started | TAX-07 |
 | TAX-11 | Validate complete preparation journeys and document handoff | P1 | M | Not started | TAX-08, TAX-09 |
 | TAX-12 | Add evidence-grounded local tax Q&A | P2 | M | Not started | TAX-08, TAX-10, TAX-11 |
-| TAX-13 | Audit investment statements and TaxAct figures | P1 | M | Not started | TAX-05, TAX-06 |
-| TAX-14 | Audit rental working papers and TaxAct figures | P1 | M | Not started | TAX-05, TAX-06 |
-| TAX-15 | Track federal/California differences and prior-year carryovers | P1 | M | Not started | TAX-05, TAX-06 |
+| TAX-13 | Audit investment statements and TaxAct figures | P1 | M | **COMPLETED** (agent E, 2026-10-01) | TAX-05, TAX-06 |
+| TAX-14 | Audit rental working papers and TaxAct figures | P1 | M | **COMPLETED** (agent E, 2026-10-01) | TAX-05, TAX-06 |
+| TAX-15 | Track federal/California differences and prior-year carryovers | P1 | M | **COMPLETED** (agent C, 2026-10-01; row reconciled from their work log) | TAX-05, TAX-06 |
 
 ```mermaid
 flowchart LR
@@ -243,13 +243,51 @@ boundaries, duplicate/corrected documents and unresolved items. Totals are exact
 reproducible and traceable. Unresolved values appear separately; a ledger edit
 invalidates affected approvals/snapshots. No model is called for arithmetic.
 
-**Status: complete (2026-09-29).** `tax/classification.py` holds the registered
+**Status: integration hardened; UI/type-summary follow-ups remain (2026-09-29).** Historical implementation baseline: `tax/classification.py` holds the registered
 treatment vocabulary plus the fact and authority behind each treatment;
 `tax/reconciliation.py` holds exact, reproducible, traceable totals per basis
 (source-form vs bank-flow) and persisted runs whose content hash covers the
 totals *and their member ids*. 29 tests; unit suite 449 passed, 10 skipped.
 Full detail, including one out-of-scope schema addition the coordinator may want
 to revisit, in the [TAX-06 work log](tax-06-work-log.md).
+
+**Acceptance follow-up: isolated regressions met; integration acceptance pending (2026-09-29).** The [review](review-2026-09-29.md)
+found five correctness gaps; all are fixed, each reproduced before the change and
+re-run after: a repeated classification no longer duplicates an amount, a failed
+split no longer erases the prior decision, a classification can no longer be made
+over unverified evidence, an unclassified row is now reported as unresolved
+instead of vanishing, and a corrected document now stales its persisted run.
+Classification writes also honour the workspace lock.
+
+Implemented the resolved [hardening proposal](tax-06-hardening-proposal.md):
+replay-safe revision history with one decision head per (workspace, subject,
+measure), amounts read from the source rather than the caller, a
+head version check (subsequently strengthened to a database claim during integration), source-change re-review,
+distinct investment measures, and a persisted, versioned review scope where
+`UNCONFIGURED` cannot yield a complete run. Migration `e2b47a9c6d10` preserves
+legacy rows and moves ambiguous pre-hardening groups to `NEEDS_FACT` rather than
+approving them. Unit suite **515 passed, 10 skipped**. Full evidence, including
+two defects introduced and fixed during the pass, in the
+[hardening log](tax-06-hardening-log.md).
+
+**Coordinator integration fixes completed:** database-level head claims and automatic
+rollback now prevent competing/cached reviews from creating duplicate current
+parts. Rental totals enforce property scope; creates/transfers/imports invalidate
+affected reports in their transaction; readiness refuses final packets with
+scope/evidence/revision/comparison gaps; resolved history is excluded from pending
+counts. Readiness and source totals also refresh cached database rows. Prior
+comparisons remain stale history when a new review replaces them.
+
+The full default suite passed **557 tests, 10 skipped, 4 deselected**; Ruff and
+`git diff --check` passed. The [integration-fix handoff](tax-06-integration-fixes-2026-09-29.md)
+records the 22 new regression cases and remaining boundaries. TAX-08 still needs
+per-field TaxAct comparison coverage and binding to reviewed source snapshots;
+the service gate checks recorded comparisons, not completeness of form mapping.
+
+The PDF worker is now connected to `pdf_text.extract_pages()` by default, with an
+explicit in-process override. Parser errors/timeouts no longer establish scans.
+Original-page review UI and the aggregate "Verified Total" KPI remain outstanding.
+History retention policy remains a lower-priority follow-up.
 
 ## TAX-07 — Add local extraction proposals with citations
 
@@ -292,6 +330,26 @@ entries, duplicate income, missing basis and missing rental support produce
 focused discrepancies; resolved items retain their explanation and evidence. Formula-like text is safe in CSV
 outputs. A reviewer can trace every approved amount to its evidence. No promise
 of TaxAct import compatibility without validating the exact product/format.
+
+**Status: complete (agent E, 2026-10-01).** `tax/taxact_fields.py` provides
+the stronger coverage gate the TAX-06 integration review asked for: every
+*required* TaxAct field (investments, rentals, and California Schedule CA
+where facts are recorded) must have a current, matched comparison against
+today's working-paper amount — with verdicts COVERED / DISCREPANCY /
+SOURCE_DRIFT / NOT_RECORDED / ORPHANED / NOT_REQUIRED, so a stale or missing
+entry is a named gap, never a silent pass. `tax/export.py` writes a private
+export directory (manifest.json + taxact_inputs.csv + packet.md): drafts
+always allowed and labelled in all three artifacts; finals refused with
+every gap named; the manifest's content hash pins the exact reviewed
+snapshot (deterministic, timestamp-excluded) and `verify_export_current`
+marks an export stale when evidence changes; CSV cells are
+formula-injection-safe; documents appear as id/name/type/hash-prefix only.
+`app_pages/tax_compare.py` is the comparison screen with the entry-recording
+form and export buttons (nav line handed to the coordinator). Comparison
+rows now carry the reviewer's recorded explanation over synthesized notes.
+15 tests map to every acceptance criterion. Unit suite at hand-off:
+**620 passed, 10 skipped**. Details in the
+[TAX-08 work log](tax-08-work-log.md).
 
 ## TAX-09 — Add tax workspace backup and restore
 
@@ -390,6 +448,22 @@ reported wash-sale adjustment, dividends and capital-loss carryover scenarios
 produce exact comparisons and cited questions. Gains never derive from bank
 withdrawals/deposits. TaxAct computes the return; this service audits inputs.
 
+**Status: complete (agent E, 2026-10-01).** `tax/investments.py` (read-only
+`InvestmentAuditService`: working paper from verified 1099-INT/DIV/B evidence
+plus TaxAct comparison rows with MATCHED / DISCREPANCY / SOURCE_DRIFT /
+NOT_RECORDED / ORPHANED), read-only view `app_pages/tax_investments.py`
+(boot-tested; the one nav line in `app.py` is left to the coordinator to merge
+with TAX-14/TAX-15's pages), and 17 tests covering every acceptance scenario
+with exact figures. Unknown basis stays unknown (never zero, question cited),
+wash-sale adjustments are preserved with net-after-wash shown beside gross,
+summary/detail and cross-statement duplicates are flagged, corrected-statement
+lineage is stated, a missing prior return is a question not a zero, and gains
+structurally cannot derive from bank flows (module imports no ledger rows;
+verified by an AST import check and a ±$500k invariance test). Sale-total keys
+match TAX-06 measure names and agree with `investment_totals()` given the same
+reviewed decisions. Details and evidence mapping in the
+[TAX-13 work log](tax-13-work-log.md).
+
 ## TAX-14 — Audit rental working papers and TaxAct figures
 
 **Owner scope:** `tax/rentals.py`, rental working-paper view and tests; no shared
@@ -406,6 +480,20 @@ missing depreciation history or automatically decide deductibility.
 escrow double counting, a possible improvement, missing prior asset schedule
 and corrected statement. Amounts trace to documents and allocations reconcile.
 Unresolved treatment/history prevents an item being marked fully checked.
+
+**Status: complete (agent E, 2026-10-01).** `tax/rentals.py` (read-only
+`RentalAuditService`: per-property working papers with separated
+not-an-expense lines, escrow/1098 cross-checks, depreciation and
+suspended-loss history never inferred, and Schedule E comparison rows with
+MATCHED / DISCREPANCY / SOURCE_DRIFT / NOT_RECORDED / ORPHANED), read-only
+view `app_pages/tax_rentals.py` (boot-tested; nav line left to the
+coordinator), and 22 tests covering every acceptance scenario. Mortgage
+principal and deposits are separated and questioned, never summed; capital
+improvement suspects carry their recorded authority; ownership/use facts are
+preserved and never silently applied; missing history is a question, not
+zero; `fully_checked` requires zero questions and in-scope coverage; both
+audit layers agree with reconciliation given the same reviewed decisions.
+Details and evidence mapping in the [TAX-14 work log](tax-14-work-log.md).
 
 ## TAX-15 — Track federal/California differences and prior-year carryovers
 
@@ -424,6 +512,21 @@ loss and suspended rental loss, missing prior return, and part-year/unknown
 residency fixtures preserve differences and flag unknowns. No guessed carryover
 or residency-dependent mapping is marked verified. Checks concern documented
 inputs and comparisons, not an independent calculation of tax owed.
+
+**Status: complete (agent C, 2026-10-01).** Implemented in `src/local_ledger/tax/california.py`,
+`app_pages/tax_california.py`, `app.py`, `src/local_ledger/tax/__init__.py`,
+`tests/unit/tax/test_tax_california.py`, and `tests/unit/test_ui_smoke.py`.
+Provides official 2025 California statutory authority registry (R&TC §§ 17201, 17250, 18151,
+17551, 17255, 17143, 17215, 17131 / IRC conformity and nonconformity rules); taxpayer
+residency analysis and real property location sourcing (UNKNOWN residency blocks verification,
+nonresidents exclude out-of-state property, part-year residents flag Form 540NR dual-allocation);
+separate federal vs California depreciation schedules (FTB 3885A vs Form 4562, bonus depreciation
+nonconformity, remaining basis on disposition); prior-year carryovers (Schedule D capital losses
+with $3,000 limit, FTB 3801 passive rental losses, missing returns strictly preserved as None /
+never coerced to $0); Schedule CA (540) Column B subtractions and Column C additions report;
+and TaxAct comparison item generation. 10 unit tests and 1 UI smoke test; full unit test suite
+passed **583 passed, 10 skipped**. Full detail in the [TAX-15 work log](tax-15-work-log.md).
+
 
 ## Parallel agent execution
 

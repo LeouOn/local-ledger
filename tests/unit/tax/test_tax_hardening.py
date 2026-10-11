@@ -42,6 +42,7 @@ from local_ledger.tax import (
     ResidencyStatus,
     TaxWorkspaceService,
 )
+from local_ledger.tax.scope import ReviewScopeMode, WorkspaceScopeService
 from local_ledger.tax.service import (
     EntityNotFoundError,
     InvalidStateTransitionError,
@@ -431,6 +432,14 @@ def test_non_draft_packet_is_allowed_once_questions_are_resolved(
     )
     svc.resolve_tax_question(q.id, resolution="Asked the broker; basis confirmed")
 
+    WorkspaceScopeService(svc.session).configure(
+        workspace_id=ws.id, mode=ReviewScopeMode.DOCUMENTS_ONLY, properties_confirmed=True,
+    )
+    svc.record_reconciliation_item(
+        workspace_id=ws.id, tax_section="Form 8949", field_key="proceeds",
+        source_working_paper_cents=50000, taxact_entered_cents=50000,
+        delta_cents=0, status=ReconciliationStatus.MATCHED,
+    )
     packet = svc.create_evidence_packet(ws.id, is_draft=False)
     assert packet.is_draft is False
     assert packet.is_stale is False
@@ -450,6 +459,14 @@ def test_stale_evidence_cannot_be_promoted_to_a_final_packet(
         amount_cents=50000,
     )
     svc.verify_field(field.id, verified_by="auditor@local")
+    WorkspaceScopeService(svc.session).configure(
+        workspace_id=ws.id, mode=ReviewScopeMode.DOCUMENTS_ONLY, properties_confirmed=True,
+    )
+    svc.record_reconciliation_item(
+        workspace_id=ws.id, tax_section="Form 8949", field_key="proceeds",
+        source_working_paper_cents=50000, taxact_entered_cents=50000,
+        delta_cents=0, status=ReconciliationStatus.MATCHED,
+    )
     packet = svc.create_evidence_packet(ws.id, is_draft=False)
     assert packet.is_stale is False
 

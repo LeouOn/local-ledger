@@ -29,7 +29,7 @@ class OllamaState(StrEnum):
 # --- provider-appropriate guidance -----------------------------------------
 #
 # Status messages are keyed by the selected local profile ("ollama", "ds4",
-# "glm") so users of DwarfStar servers are not told to install Ollama.
+# "glm", "glmo") so users of DwarfStar servers are not told to install Ollama.
 
 GUIDANCE: dict[OllamaState, str] = {
     OllamaState.NOT_INSTALLED: "Install Ollama from https://ollama.com and restart the app.",
@@ -67,6 +67,21 @@ _PROFILE_GUIDANCE: dict[str, dict[OllamaState, str]] = {
             "profile; stop that server manually before starting this one."
         ),
         OllamaState.READY: "Local model is ready.",
+    },
+    "glmo": {
+        OllamaState.NOT_INSTALLED: (
+            "Official GLM launcher not found. Set LOCAL_LEDGER_DS4_HOME to the "
+            "directory containing run-glm-official.sh."
+        ),
+        OllamaState.NOT_RUNNING: (
+            "Start run-glm-official.sh with no arguments, or enable "
+            "'Start local server when needed' in Settings."
+        ),
+        OllamaState.MODEL_MISSING: (
+            "The local endpoint is not serving the selected official GLM model. "
+            "Check the model ID in Settings and the server's /v1/models listing."
+        ),
+        OllamaState.READY: "Official local GLM model is ready.",
     },
 }
 

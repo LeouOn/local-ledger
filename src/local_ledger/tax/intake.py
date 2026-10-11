@@ -12,9 +12,6 @@ Provides:
 
 from __future__ import annotations
 
-import contextlib
-import re
-import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -28,6 +25,7 @@ from local_ledger.tax.models import (
     ScanState,
     TaxDocument,
 )
+from local_ledger.tax.pdf_text import PageStatus, extract_pages
 from local_ledger.tax.service import (
     TaxWorkspaceService,
 )
@@ -200,80 +198,42 @@ def get_inventory_status(session: Session, workspace_id: str) -> list[InventoryS
 
 
 def extract_pdf_page_texts(pdf_bytes: bytes) -> tuple[str, int, dict[int, str]]:
-    """Extract page count and text layer per page from a PDF.
+    """Extract page count and per-page text from a PDF.
 
-    Returns:
-        (scan_state, page_count, {page_num: text})
+    Delegates to :mod:`local_ledger.tax.pdf_text`, which uses ``PdfReader`` so
+    each page's text is attributed to that page. The previous implementation
+    assumed the Nth content stream in the file was page N and, when a page
+    yielded no text, substituted the whole document's text for it - so a
+    reviewer checking a field "against page 3" could be shown page 1 with no
+    indication. Page attribution now comes from the page tree, and a page with
+    no text says so on that page.
+
+    The extracted text is a locating aid, not the authoritative view: the stored
+    original PDF is what a reviewer verifies against.
     """
     if not pdf_bytes.startswith(b"%PDF"):
-        # Not a PDF
         return ScanState.UNSUPPORTED_TYPE, 1, {1: ""}
 
-    # 1. Page count estimation via /Type /Page
-    page_matches = re.findall(rb"/Type\s*/Page\b", pdf_bytes)
-    page_count = max(len(page_matches), 1)
+    result = extract_pages(pdf_bytes)
 
-    # 2. Extract streams
-    stream_matches = re.findall(rb"stream[\r\n]+(.*?)[\r\n]+endstream", pdf_bytes, re.DOTALL)
-    decompressed_streams: list[bytes] = []
+    if result.error is not None:
+        # Encrypted, malformed or unreadable: report the reason on page 1 and
+        # route to manual entry. Never an empty success.
+        return ScanState.UNSUPPORTED_TYPE, max(result.page_count, 1), {1: f"({result.error})"}
 
-    for s in stream_matches:
-        try:
-            data = zlib.decompress(s)
-            decompressed_streams.append(data)
-        except Exception:
-            # If not zlib-compressed, check if it's raw text
-            if b"BT" in s and b"ET" in s:
-                decompressed_streams.append(s)
+    pages: dict[int, str] = {}
+    for page in result.pages:
+        if page.page_number == result.page_count + 1 and page.status is PageStatus.SKIPPED_AFTER_LIMIT:
+            continue  # the "pages beyond the limit" note, not a real page
+        pages[page.page_number] = page.text
 
-    # 3. Extract text from text operators: (string) Tj or [(string)...] TJ
-    extracted_tokens: list[str] = []
-    for stream in decompressed_streams:
-        # Match (text) Tj
-        tj_matches = re.findall(rb"\((.*?)\)\s*(?:Tj|')", stream)
-        for m in tj_matches:
-            with contextlib.suppress(Exception):
-                extracted_tokens.append(m.decode("latin-1"))
-
-        # Match [(str1) (str2)] TJ
-        tj_array_matches = re.findall(rb"\[(.*?)\]\s*TJ", stream)
-        for arr in tj_array_matches:
-            items = re.findall(rb"\((.*?)\)", arr)
-            for it in items:
-                with contextlib.suppress(Exception):
-                    extracted_tokens.append(it.decode("latin-1"))
-
-    total_text = " ".join(extracted_tokens).strip()
-
-    if not total_text or len(total_text) < 5:
-        # Document is a scanned PDF without text layer
-        pages_dict = {
-            p: f"(Scanned page {p} - no embedded text layer detected. Please use Manual Field Entry below.)"
-            for p in range(1, page_count + 1)
-        }
-        return ScanState.SCANNED_NO_TEXT, page_count, pages_dict
-
-    # Text is extractable. If single stream, assign to page 1; otherwise distribute
-    pages_dict = {}
-    if len(decompressed_streams) >= page_count:
-        for idx in range(page_count):
-            stream = decompressed_streams[idx]
-            page_tokens = []
-            for m in re.findall(rb"\((.*?)\)\s*(?:Tj|')", stream):
-                with contextlib.suppress(Exception):
-                    page_tokens.append(m.decode("latin-1"))
-            for arr in re.findall(rb"\[(.*?)\]\s*TJ", stream):
-                for it in re.findall(rb"\((.*?)\)", arr):
-                    with contextlib.suppress(Exception):
-                        page_tokens.append(it.decode("latin-1"))
-            page_text = " ".join(page_tokens).strip() or total_text
-            pages_dict[idx + 1] = page_text
+    if result.is_scanned:
+        state = ScanState.SCANNED_NO_TEXT
+    elif result.pages_with_text:
+        state = ScanState.TEXT_EXTRACTABLE
     else:
-        pages_dict = {1: total_text}
-        for p in range(2, page_count + 1):
-            pages_dict[p] = f"(Page {p} text)"
-
-    return ScanState.TEXT_EXTRACTABLE, page_count, pages_dict
+        state = ScanState.UNSUPPORTED_TYPE
+    return state, result.page_count, pages
 
 
 def inspect_file_content(file_bytes: bytes, file_name: str) -> tuple[str, int, dict[int, str]]:

@@ -35,6 +35,7 @@ from local_ledger.ingest.csv_import import ParsedTransaction
 from local_ledger.ingest.payees import resolve_or_create_payee
 from local_ledger.ledger import audit
 from local_ledger.ledger.dedup import Candidate, classify
+from local_ledger.ledger.invalidation import notify_transactions_changed
 from local_ledger.models import (
     DedupStatus,
     Payee,
@@ -383,6 +384,7 @@ class ImportService:
             live.append(tx)
             if payee is not None:
                 payee_names[payee.id] = payee.name
+        notify_transactions_changed(self.session, [tx.id for tx in created])
         self.session.commit()
         return CommitResult(created=created, skipped=skipped)
 

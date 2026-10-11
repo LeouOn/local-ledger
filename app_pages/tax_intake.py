@@ -16,6 +16,9 @@ import pandas as pd
 import streamlit as st
 from sqlmodel import select
 
+from local_ledger.llm.providers import load_settings
+from local_ledger.models import Account
+from local_ledger.tax.extraction import local_client_and_model, propose_for_documents
 from local_ledger.tax.intake import (
     EXPECTED_2025_CATEGORIES,
     add_manual_field,
@@ -31,10 +34,12 @@ from local_ledger.tax.models import (
     Jurisdiction,
     ScanState,
     TaxDocument,
+    TaxProperty,
     WorkspaceStatus,
 )
+from local_ledger.tax.scope import ReviewScopeMode, WorkspaceScopeService
 from local_ledger.tax.service import TaxWorkspaceService
-from local_ledger.tax.storage import verify_stored_document
+from local_ledger.tax.storage import sanitize_path, verify_stored_document
 from local_ledger.ui.chrome import get_session
 from local_ledger.ui.components import kpi_card, section_header, status_badge
 
@@ -66,6 +71,44 @@ is_locked = workspace.status == WorkspaceStatus.LOCKED
 if is_locked:
     st.warning(f"🔒 Tax Workspace {tax_year} ({jurisdiction}) is LOCKED and immutable. Changes are disabled.")
 
+scope_svc = WorkspaceScopeService(session)
+scope = scope_svc.get(workspace.id)
+with st.expander("Review scope", expanded=not scope.is_configured):
+    st.caption("Choose which accounts and properties this review covers. Documents only skips bank-flow checks.")
+    accounts = list(session.exec(select(Account).order_by(Account.name)).all())
+    properties = list(session.exec(select(TaxProperty).where(TaxProperty.workspace_id == workspace.id)).all())
+    with st.form(f"tax_scope_{workspace.id}"):
+        mode = st.selectbox(
+            "Review mode", list(ReviewScopeMode), index=list(ReviewScopeMode).index(scope.mode),
+            format_func=lambda m: {
+                ReviewScopeMode.UNCONFIGURED: "Not configured",
+                ReviewScopeMode.DOCUMENTS_ONLY: "Documents only",
+                ReviewScopeMode.SELECTED_ACCOUNTS: "Selected accounts and documents",
+            }[m], disabled=is_locked,
+        )
+        account_ids = st.multiselect(
+            "Accounts", [a.id for a in accounts], default=scope.account_ids,
+            format_func=lambda aid: next(a.name for a in accounts if a.id == aid), disabled=is_locked,
+        )
+        property_ids = st.multiselect(
+            "Rental properties", [p.id for p in properties], default=scope.property_ids,
+            format_func=lambda pid: next(p.street_address for p in properties if p.id == pid), disabled=is_locked,
+        )
+        confirmed = st.checkbox(
+            "I have confirmed this property list, including an intentionally empty list",
+            value=scope.properties_confirmed, disabled=is_locked,
+        )
+        if st.form_submit_button("Save review scope", disabled=is_locked):
+            try:
+                scope_svc.configure(
+                    workspace_id=workspace.id, mode=mode,
+                    account_ids=account_ids if mode == ReviewScopeMode.SELECTED_ACCOUNTS else [],
+                    property_ids=property_ids, properties_confirmed=confirmed,
+                )
+                st.rerun()
+            except Exception as err:
+                st.error(f"Could not save review scope: {sanitize_path(str(err))}")
+
 # ---------------------------------------------------------------------------
 # Workspace KPIs
 # ---------------------------------------------------------------------------
@@ -86,16 +129,16 @@ with kpi_cols[0]:
     )
 with kpi_cols[1]:
     kpi_card(
-        "Verified Total",
-        f"${summary['verified_cents'] / 100:,.2f}",
-        delta=f"{summary['verified_count']} approved items",
+        "Verified Fields",
+        str(summary["verified_count"]),
+        delta="See working papers for totals by type",
         status="ok",
     )
 with kpi_cols[2]:
     kpi_card(
         "Proposed Fields",
         str(summary["proposed_count"]),
-        delta=f"${summary['proposed_cents'] / 100:,.2f} pending",
+        delta="Awaiting your review",
         status="warn" if summary["proposed_count"] > 0 else "ok",
     )
 with kpi_cols[3]:
@@ -289,7 +332,6 @@ with tab_inspect:
                 st.markdown(f"**Filename:** `{inspected_doc.file_name}`")
                 st.markdown(f"**Document Type:** `{inspected_doc.doc_type}`")
             with meta_col2:
-                st.markdown(f"**Size:** `{inspected_doc.byte_size:,} bytes`")
                 st.markdown(f"**Scan State:** `{inspected_doc.scan_state}`")
             with meta_col3:
                 st.markdown(f"**SHA-256:** `{inspected_doc.sha256_hash[:16]}...`")
@@ -314,6 +356,46 @@ with tab_inspect:
                     inspected_doc.storage_path, inspected_doc.sha256_hash
                 )
                 file_bytes = verified_path.read_bytes()
+                st.caption(f"Original file: {len(file_bytes):,} bytes; SHA-256 verified.")
+                st.download_button(
+                    "Download original document", file_bytes, file_name=inspected_doc.file_name,
+                    key=f"download_original_{inspected_doc.id}",
+                )
+                active_fields = session.exec(select(ExtractedField).where(
+                    ExtractedField.document_id == inspected_doc.id,
+                    ExtractedField.status.in_([EvidenceStatus.PROPOSED, EvidenceStatus.VERIFIED]),
+                )).all()
+                st.caption("Local extraction proposes fields for your review. Check each value against the original before verifying.")
+                if active_fields:
+                    st.info("This document already has active review fields. Review them in the Verification Queue or enter missing fields manually.")
+                report_key = f"tax_extract_report_{workspace.id}_{inspected_doc.id}"
+                if st.button(
+                    "Extract proposals with local model", key=f"btn_extract_{inspected_doc.id}",
+                    disabled=is_locked or superseding_doc is not None or bool(active_fields),
+                ):
+                    client = None
+                    try:
+                        client, model = local_client_and_model(load_settings(session))
+                        with st.spinner(f"Extracting fields with {model}…"):
+                            st.session_state[report_key] = propose_for_documents(
+                                tax_svc, workspace.id, [(inspected_doc.id, file_bytes)],
+                                client=client, model=model,
+                            )
+                    except Exception as err:
+                        st.error(f"Local extraction failed: {sanitize_path(str(err))}")
+                    finally:
+                        if client is not None:
+                            client.close()
+                report = st.session_state.get(report_key)
+                if report is not None:
+                    st.info(f"{report.written_count} proposed field(s) saved. Open the Verification Queue to review them.")
+                    for proposal_set in report.sets:
+                        for note in proposal_set.notes:
+                            st.info(note)
+                        for unresolved in proposal_set.unresolved:
+                            st.warning(f"Not proposed: {unresolved.field_name or '?'} — {unresolved.reason}")
+                    for error in report.errors:
+                        st.error(sanitize_path(error.reason))
                 _scan_state, page_count, pages_dict = inspect_file_content(
                     file_bytes, inspected_doc.file_name
                 )

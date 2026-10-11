@@ -13,6 +13,7 @@ dependencies = [
     "pandas>=2.2",
     "openai>=1.40",
     "pydantic>=2.7",
+    "pypdf>=6.19",
     "tiktoken>=0.7",
 ]
 
